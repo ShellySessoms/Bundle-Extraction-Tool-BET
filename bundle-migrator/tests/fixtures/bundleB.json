@@ -1,0 +1,191 @@
+{
+  "bundleId": "a0A000000000002BBB",
+  "bundleName": "Client Template v3",
+  "bundleLookupKey": "Client_Template_v3",
+  "extractedAt": "2026-04-12T09:15:00.000Z",
+  "exportFilePath": "/tmp/bundleB.json",
+  "referenceData": {
+    "financialConsolidationName": "Custom Consolidation",
+    "classificationNames": ["Commercial", "Agriculture"],
+    "projectionsTemplateLookupKeys": ["PROJ_TEMPLATE_001", "PROJ_TEMPLATE_002"]
+  },
+  "records": {
+    "LLC_BI__Underwriting_Bundle__c": [
+      {
+        "Id": "a0B000000000002BBB",
+        "Name": "Client Template v3",
+        "LLC_BI__lookupKey__c": "Client_Template_v3",
+        "LLC_BI__Is_Template__c": true,
+        "LLC_BI__Version__c": "3"
+      }
+    ],
+    "LLC_BI__Spread_Statement_Type__c": [
+      {
+        "Id": "a0C000000000004BBB",
+        "Name": "000009001",
+        "LLC_BI__lookupKey__c": "55160186225772921",
+        "LLC_BI__Type__c": "Income Statement",
+        "LLC_BI__Sort_Order__c": 1,
+        "LLC_BI__Source__c": "Import",
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Calculation_Type__c": null
+      },
+      {
+        "Id": "a0C000000000005BBB",
+        "Name": "000009002",
+        "LLC_BI__lookupKey__c": "55295972277995789",
+        "LLC_BI__Type__c": "Balance Sheet",
+        "LLC_BI__Sort_Order__c": 2,
+        "LLC_BI__Source__c": "Manual",
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Calculation_Type__c": null
+      },
+      {
+        "Id": "a0C000000000006BBB",
+        "Name": "000009003",
+        "LLC_BI__lookupKey__c": "55828974535248196",
+        "LLC_BI__Type__c": "Summary Direct CF",
+        "LLC_BI__Sort_Order__c": 3,
+        "LLC_BI__Source__c": "Calculated",
+        "LLC_BI__Is_Calculated__c": true,
+        "LLC_BI__Calculation_Type__c": "Direct"
+      },
+      {
+        "Id": "a0C000000000007BBB",
+        "Name": "000009004",
+        "LLC_BI__lookupKey__c": "55928974535248197",
+        "LLC_BI__Type__c": "Rent Roll",
+        "LLC_BI__Sort_Order__c": 4,
+        "LLC_BI__Source__c": "Manual",
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Calculation_Type__c": null
+      }
+    ],
+    "LLC_BI__Spread_Statement_Record__c": [
+      {
+        "Id": "a0D000000000004BBB",
+        "Name": "Total Sales",
+        "LLC_BI__lookupKey__c": "55706530254718003",
+        "LLC_BI__Spread_Statement_Type__c": "a0C000000000004BBB",
+        "LLC_BI__Formula__c": null,
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Row_Type__c": "Detail",
+        "LLC_BI__Sort_Order__c": 1
+      },
+      {
+        "Id": "a0D000000000005BBB",
+        "Name": "Cost of Goods Sold",
+        "LLC_BI__lookupKey__c": "55349822639005433",
+        "LLC_BI__Spread_Statement_Type__c": "a0C000000000004BBB",
+        "LLC_BI__Formula__c": null,
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Row_Type__c": "Detail",
+        "LLC_BI__Sort_Order__c": 2
+      },
+      {
+        "Id": "a0D000000000007BBB",
+        "Name": "Operating Expenses",
+        "LLC_BI__lookupKey__c": "55449822639005434",
+        "LLC_BI__Spread_Statement_Type__c": "a0C000000000004BBB",
+        "LLC_BI__Formula__c": null,
+        "LLC_BI__Is_Calculated__c": false,
+        "LLC_BI__Row_Type__c": "Detail",
+        "LLC_BI__Sort_Order__c": 3
+      },
+      {
+        "Id": "a0D000000000006BBB",
+        "Name": "Total Assets",
+        "LLC_BI__lookupKey__c": "55947150312019563",
+        "LLC_BI__Spread_Statement_Type__c": "a0C000000000005BBB",
+        "LLC_BI__Formula__c": "SUM(Current_Assets, Fixed_Assets, Other_Assets)",
+        "LLC_BI__Is_Calculated__c": true,
+        "LLC_BI__Row_Type__c": "Total",
+        "LLC_BI__Sort_Order__c": 10
+      }
+    ],
+    "LLC_BI__Spread_Statement_Period__c": [],
+    "LLC_BI__Spread_Statement_Record_Value__c": [],
+    "LLC_BI__Spread_Statement_Record_Total__c": [
+      {
+        "Id": "a0E000000000002BBB",
+        "Name": "000009100",
+        "LLC_BI__lookupKey__c": "55140764778589945",
+        "LLC_BI__Spread_Statement_Type__c": "a0C000000000004BBB",
+        "LLC_BI__Title__c": "Net Income",
+        "LLC_BI__Formula__c": "Revenue - OPEX",
+        "LLC_BI__Sort_Order__c": 1,
+        "LLC_BI__Row_Number__c": 100
+      }
+    ],
+    "LLC_BI__Spread_Statement_Period_Total__c": [],
+    "LLC_BI__Spread_Record_Classification__c": [
+      { "Id": "a0F000000000003BBB", "LLC_BI__lookupKey__c": "CLASS_COMMERCIAL_002" },
+      { "Id": "a0F000000000004BBB", "LLC_BI__lookupKey__c": "CLASS_AGRICULTURE_001" },
+      { "Id": "a0F000000000005BBB", "LLC_BI__lookupKey__c": "CLASS_AGRICULTURE_002" }
+    ],
+    "LLC_BI__Spread_Statement_Row_Mapping__c": [
+      { "Id": "a0G000000000003BBB", "LLC_BI__lookupKey__c": "ROWMAP_101" },
+      { "Id": "a0G000000000004BBB", "LLC_BI__lookupKey__c": "ROWMAP_102" },
+      { "Id": "a0G000000000005BBB", "LLC_BI__lookupKey__c": "ROWMAP_103" }
+    ],
+    "LLC_BI__Projection_Bundle_Junction__c": [
+      { "Id": "a0H000000000002BBB", "LLC_BI__Projection_Template__c": "PROJ_001" },
+      { "Id": "a0H000000000003BBB", "LLC_BI__Projection_Template__c": "PROJ_002" }
+    ],
+    "LLC_BI__Spread_Projections_Driver__c": [],
+    "LLC_BI__Schedule__c": [
+      {
+        "Id": "a0I000000000002BBB",
+        "Name": "Amortization Schedule",
+        "LLC_BI__lookupKey__c": "AMORT_SCHED_002",
+        "LLC_BI__Table_Format__c": "Compact",
+        "LLC_BI__Is_Template__c": true,
+        "LLC_BI__Underwriting_Bundle__c": "a0B000000000002BBB"
+      },
+      {
+        "Id": "a0I000000000003BBB",
+        "Name": "Interest Only Schedule",
+        "LLC_BI__lookupKey__c": "IO_SCHED_001",
+        "LLC_BI__Table_Format__c": "Standard",
+        "LLC_BI__Is_Template__c": true,
+        "LLC_BI__Underwriting_Bundle__c": "a0B000000000002BBB"
+      }
+    ],
+    "LLC_BI__Schedule_Entry__c": [
+      { "Id": "a0J000000000003BBB", "LLC_BI__lookupKey__c": "SCHED_ENTRY_003", "LLC_BI__Schedule__c": "a0I000000000002BBB" },
+      { "Id": "a0J000000000004BBB", "LLC_BI__lookupKey__c": "SCHED_ENTRY_004", "LLC_BI__Schedule__c": "a0I000000000002BBB" },
+      { "Id": "a0J000000000005BBB", "LLC_BI__lookupKey__c": "SCHED_ENTRY_005", "LLC_BI__Schedule__c": "a0I000000000002BBB" }
+    ],
+    "LLC_BI__Schedule_Section__c": [],
+    "LLC_BI__Debt_Schedule__c": [
+      {
+        "Id": "a0K000000000002BBB",
+        "Name": "Primary Debt Schedule",
+        "LLC_BI__lookupKey__c": "DEBT_SCHED_002",
+        "LLC_BI__Debt_Filter_Syntax__c": "Type IN ('Term', 'Revolving')",
+        "LLC_BI__Is_Template__c": true,
+        "LLC_BI__Bundle__c": "a0B000000000002BBB"
+      },
+      {
+        "Id": "a0K000000000003BBB",
+        "Name": "Secondary Debt Schedule",
+        "LLC_BI__lookupKey__c": "DEBT_SCHED_003",
+        "LLC_BI__Debt_Filter_Syntax__c": "Type = 'LOC'",
+        "LLC_BI__Is_Template__c": true,
+        "LLC_BI__Bundle__c": "a0B000000000002BBB"
+      }
+    ],
+    "LLC_BI__Debt__c": [
+      { "Id": "a0L000000000003BBB", "LLC_BI__lookupKey__c": "DEBT_003", "LLC_BI__Debt_Schedule__c": "a0K000000000002BBB" }
+    ],
+    "LLC_BI__Debt_Internal__c": [],
+    "LLC_BI__Loan_Assumptions__c": [
+      { "Id": "a0M000000000002BBB", "LLC_BI__lookupKey__c": "LOAN_ASSUMPTION_001" },
+      { "Id": "a0M000000000003BBB", "LLC_BI__lookupKey__c": "LOAN_ASSUMPTION_002" }
+    ]
+  },
+  "backfillData": {
+    "records": {},
+    "statementTypes": {}
+  }
+}
