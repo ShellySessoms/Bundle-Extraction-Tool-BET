@@ -12,10 +12,39 @@ import type {
   ResolvedReferences
 } from '../shared/types'
 
-/** Payload shape for conn.sobject().update() — requires Id to be present */
 type UpdatePayload = { Id: string; [key: string]: unknown }
 
-// ─── Logging ─────────────────────────────────────────────────────────────────
+const AUTO_NUMBER_OBJECTS = new Set([
+  'LLC_BI__Spread_Statement_Type__c',
+  'LLC_BI__Spread_Statement_Record__c',
+  'LLC_BI__Spread_Statement_Record_Total__c',
+  'LLC_BI__Spread_Record_Classification__c',
+  'LLC_BI__Spread_Record_Total_Classification__c',
+  'LLC_BI__Spread_Statement_Period__c',
+  'LLC_BI__Spread_Statement_Record_Value__c',
+  'LLC_BI__Spread_Statement_Period_Total__c',
+  'LLC_BI__Spread_Statement_Record_Group__c',
+  'LLC_BI__Spread_Statement_Row_Mapping__c',
+  'LLC_BI__Projection_Bundle_Junction__c',
+  'LLC_BI__Period_Consolidation__c',
+  'LLC_BI__Spread_Projections_Driver__c',
+  'LLC_BI__Schedule__c',
+  'LLC_BI__Schedule_Section__c',
+  'LLC_BI__Schedule_Entry__c',
+  'LLC_BI__Debt_Schedule__c',
+  'LLC_BI__Debt__c',
+  'LLC_BI__Loan_Assumptions__c',
+  'LLC_BI__Sensitivity_Analysis__c',
+  'LLC_BI__Tenant_Information__c'
+])
+
+const SYSTEM_FIELDS = [
+  'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
+  'SystemModstamp', 'IsDeleted', 'LastActivityDate', 'LastViewedDate',
+  'LastReferencedDate'
+]
+
+// ─── Logging ────────────────────────────────────────────────────────────────
 
 function logInfo(message: string): void {
   log.info(`[importer] ${message}`)
@@ -25,7 +54,7 @@ function logWarn(message: string): void {
   log.warn(`[importer] ${message}`)
 }
 
-// ─── SOQL helpers ────────────────────────────────────────────────────────────
+// ─── SOQL helpers ───────────────────────────────────────────────────────────
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = []
@@ -46,7 +75,7 @@ async function queryAll<T extends SfRecord>(
   return result.records as T[]
 }
 
-// ─── resolveIdByLookupKey ────────────────────────────────────────────────────
+// ─── resolveIdByLookupKey ───────────────────────────────────────────────────
 
 async function resolveIdByLookupKey(
   conn: Connection,
@@ -68,10 +97,12 @@ async function resolveIdByLookupKey(
   return map
 }
 
-// ─── Upsert batch helper ────────────────────────────────────────────────────
+// ─── Upsert batch helper ───────────────────────────────────────────────────
 
 interface UpsertBatchResult {
   succeeded: number
+  created: number
+  updated: number
   failed: FailedRecord[]
 }
 
@@ -80,13 +111,32 @@ async function upsertBatch(
   objectApiName: string,
   records: SfRecord[]
 ): Promise<UpsertBatchResult> {
-  const result: UpsertBatchResult = { succeeded: 0, failed: [] }
+  const result: UpsertBatchResult = { succeeded: 0, created: 0, updated: 0, failed: [] }
   if (records.length === 0) return result
 
+  const validRecords: SfRecord[] = []
+  for (const rec of records) {
+    if (!rec.LLC_BI__lookupKey__c) {
+      result.failed.push({
+        objectName: objectApiName,
+        sourceId: rec.Id ?? '',
+        error: 'Missing LLC_BI__lookupKey__c — skipped to prevent duplicate insert',
+        record: rec
+      })
+    } else {
+      validRecords.push(rec)
+    }
+  }
+  if (validRecords.length < records.length) {
+    logWarn(`${objectApiName}: skipping ${records.length - validRecords.length} records with missing LLC_BI__lookupKey__c`)
+  }
+  if (validRecords.length === 0) return result
+  records = validRecords
+
   try {
-    if (records.length <= 200) {
-      // REST API upsert
-      const jsforceRecords = records as unknown as JsforceRecord[]
+    const batches = chunk(records, 200)
+    for (const batch of batches) {
+      const jsforceRecords = batch as unknown as JsforceRecord[]
       const upsertResults = await conn
         .sobject(objectApiName)
         .upsert(jsforceRecords, 'LLC_BI__lookupKey__c' as never)
@@ -95,45 +145,18 @@ async function upsertBatch(
         const r = resultsArray[i]
         if (r.success) {
           result.succeeded++
+          if ((r as { created?: boolean }).created) {
+            result.created++
+          } else {
+            result.updated++
+          }
         } else {
+          const errMsg = r.errors.map((e) => e.message).join('; ')
           result.failed.push({
             objectName: objectApiName,
-            sourceId: records[i]?.Id ?? '',
-            error: r.errors.map((e) => e.message).join('; '),
-            record: records[i]
-          })
-        }
-      }
-    } else {
-      // Bulk API v2 upsert
-      const jsforceRecords = records as unknown as JsforceRecord[]
-      const bulkResult = await conn.bulk2.loadAndWaitForResults({
-        object: objectApiName,
-        operation: 'upsert',
-        externalIdFieldName: 'LLC_BI__lookupKey__c',
-        input: jsforceRecords,
-        pollInterval: 5000,
-        pollTimeout: 300000
-      })
-
-      result.succeeded = bulkResult.successfulResults.length
-
-      for (const failedRow of bulkResult.failedResults) {
-        result.failed.push({
-          objectName: objectApiName,
-          sourceId: failedRow.sf__Id ?? '',
-          error: failedRow.sf__Error ?? 'Unknown error',
-          record: failedRow as unknown as SfRecord
-        })
-      }
-
-      if (Array.isArray(bulkResult.unprocessedRecords)) {
-        for (const unprocessed of bulkResult.unprocessedRecords) {
-          result.failed.push({
-            objectName: objectApiName,
-            sourceId: '',
-            error: 'Record was not processed',
-            record: unprocessed as unknown as SfRecord
+            sourceId: batch[i]?.Id ?? '',
+            error: errMsg,
+            record: batch[i]
           })
         }
       }
@@ -154,15 +177,8 @@ async function upsertBatch(
   return result
 }
 
-// ─── Parent reference resolution ─────────────────────────────────────────────
+// ─── Parent reference resolution ────────────────────────────────────────────
 
-/**
- * Field reference map: for each object, which lookup fields to remap
- * using the jsforce __r external ID reference syntax.
- *
- * Format: sourceField → { relationshipName, parentObject }
- * The parent object's LLC_BI__lookupKey__c is used as the external ID.
- */
 const FIELD_REFERENCE_MAP: {
   [objectApiName: string]: {
     [sourceField: string]: { relationship: string; parentObject: string }
@@ -210,41 +226,81 @@ const FIELD_REFERENCE_MAP: {
     'LLC_BI__Spread_Statement_Period__c': {
       relationship: 'LLC_BI__Spread_Statement_Period__r',
       parentObject: 'LLC_BI__Spread_Statement_Period__c'
+    },
+    'LLC_BI__Spread_Statement_Record_Total__c': {
+      relationship: 'LLC_BI__Spread_Statement_Record_Total__r',
+      parentObject: 'LLC_BI__Spread_Statement_Record_Total__c'
     }
   },
   'LLC_BI__Spread_Statement_Record_Group__c': {
     'LLC_BI__Spread_Statement_Record__c': {
       relationship: 'LLC_BI__Spread_Statement_Record__r',
       parentObject: 'LLC_BI__Spread_Statement_Record__c'
+    },
+    'LLC_BI__Spread_Statement_Record_Total__c': {
+      relationship: 'LLC_BI__Spread_Statement_Record_Total__r',
+      parentObject: 'LLC_BI__Spread_Statement_Record_Total__c'
     }
   },
   'LLC_BI__Spread_Record_Classification__c': {
     'LLC_BI__Spread_Statement_Record__c': {
       relationship: 'LLC_BI__Spread_Statement_Record__r',
       parentObject: 'LLC_BI__Spread_Statement_Record__c'
+    },
+    'LLC_BI__Classification__c': {
+      relationship: 'LLC_BI__Classification__r',
+      parentObject: 'LLC_BI__Classification__c'
     }
   },
   'LLC_BI__Spread_Record_Total_Classification__c': {
-    'LLC_BI__Spread_Statement_Record_Total__c': {
-      relationship: 'LLC_BI__Spread_Statement_Record_Total__r',
+    'LLC_BI__Spread_Statement_Total_Group__c': {
+      relationship: 'LLC_BI__Spread_Statement_Total_Group__r',
       parentObject: 'LLC_BI__Spread_Statement_Record_Total__c'
+    },
+    'LLC_BI__Classification__c': {
+      relationship: 'LLC_BI__Classification__r',
+      parentObject: 'LLC_BI__Classification__c'
+    }
+  },
+  'LLC_BI__Tenant_Information__c': {
+    'LLC_BI__Spread_Statement_Template__c': {
+      relationship: 'LLC_BI__Spread_Statement_Template__r',
+      parentObject: 'LLC_BI__Spread_Statement_Type__c'
+    }
+  },
+  'LLC_BI__Sensitivity_Analysis__c': {
+    'LLC_BI__Bundle__c': {
+      relationship: 'LLC_BI__Bundle__r',
+      parentObject: 'LLC_BI__Underwriting_Bundle__c'
     }
   },
   'LLC_BI__Spread_Statement_Row_Mapping__c': {
     'LLC_BI__Underwriting_Bundle__c': {
       relationship: 'LLC_BI__Underwriting_Bundle__r',
       parentObject: 'LLC_BI__Underwriting_Bundle__c'
+    },
+    'LLC_BI__Spread_Statement_Record__c': {
+      relationship: 'LLC_BI__Spread_Statement_Record__r',
+      parentObject: 'LLC_BI__Spread_Statement_Record__c'
     }
   },
   'LLC_BI__Projection_Bundle_Junction__c': {
     'LLC_BI__Bundle__c': {
       relationship: 'LLC_BI__Bundle__r',
       parentObject: 'LLC_BI__Underwriting_Bundle__c'
+    },
+    'LLC_BI__Projection_Template__c': {
+      relationship: 'LLC_BI__Projection_Template__r',
+      parentObject: 'LLC_BI__Spread_Projections_Template__c'
     }
   },
   'LLC_BI__Period_Consolidation__c': {
     'LLC_BI__Source_Period__c': {
       relationship: 'LLC_BI__Source_Period__r',
+      parentObject: 'LLC_BI__Spread_Statement_Period__c'
+    },
+    'LLC_BI__Target_Period__c': {
+      relationship: 'LLC_BI__Target_Period__r',
       parentObject: 'LLC_BI__Spread_Statement_Period__c'
     }
   },
@@ -252,6 +308,18 @@ const FIELD_REFERENCE_MAP: {
     'LLC_BI__Spread_Statement_Record__c': {
       relationship: 'LLC_BI__Spread_Statement_Record__r',
       parentObject: 'LLC_BI__Spread_Statement_Record__c'
+    },
+    'LLC_BI__Spread_Projections_Template__c': {
+      relationship: 'LLC_BI__Spread_Projections_Template__r',
+      parentObject: 'LLC_BI__Spread_Projections_Template__c'
+    },
+    'LLC_BI__Classification__c': {
+      relationship: 'LLC_BI__Classification__r',
+      parentObject: 'LLC_BI__Classification__c'
+    },
+    'LLC_BI__Spread_Statement_Record_value__c': {
+      relationship: 'LLC_BI__Spread_Statement_Record_value__r',
+      parentObject: 'LLC_BI__Spread_Statement_Record_Value__c'
     }
   },
   'LLC_BI__Schedule__c': {
@@ -292,10 +360,6 @@ const FIELD_REFERENCE_MAP: {
   }
 }
 
-/**
- * Build a lookupKey cache from the export data for a given object.
- * Maps source org Id → LLC_BI__lookupKey__c.
- */
 function buildSourceIdToLookupKey(records: SfRecord[]): Map<string, string> {
   const map = new Map<string, string>()
   for (const rec of records) {
@@ -307,11 +371,6 @@ function buildSourceIdToLookupKey(records: SfRecord[]): Map<string, string> {
   return map
 }
 
-/**
- * Replace Salesforce ID lookup fields with __r external ID reference objects.
- * Strips the source Id field and replaces it with a relationship object
- * pointing to the parent's LLC_BI__lookupKey__c.
- */
 function remapParentReferences(
   objectApiName: string,
   records: SfRecord[],
@@ -320,7 +379,6 @@ function remapParentReferences(
   const refMap = FIELD_REFERENCE_MAP[objectApiName]
   if (!refMap) return
 
-  // Pre-build lookupKey caches for all parent objects referenced
   const parentCaches = new Map<string, Map<string, string>>()
   for (const { parentObject } of Object.values(refMap)) {
     if (!parentCaches.has(parentObject)) {
@@ -337,38 +395,36 @@ function remapParentReferences(
       const cache = parentCaches.get(parentObject)
       const lookupKey = cache?.get(sourceId)
       if (lookupKey) {
-        // Replace ID field with __r reference
         delete rec[sourceField]
         rec[relationship] = { LLC_BI__lookupKey__c: lookupKey }
       }
-      // If no lookupKey found, leave the field as-is (it will likely fail on upsert,
-      // but will be captured by the error handling)
     }
   }
 }
 
-/**
- * Strip source-org Id from each record before upsert.
- * The record will be matched by LLC_BI__lookupKey__c instead.
- */
-function stripSourceIds(records: SfRecord[]): void {
+function stripNonTransferableFields(objectApiName: string, records: SfRecord[]): void {
   for (const rec of records) {
-    delete (rec as Record<string, unknown>).Id
+    const r = rec as Record<string, unknown>
+    delete r.Id
+    delete r.attributes
+    delete r.OwnerId
+    if (AUTO_NUMBER_OBJECTS.has(objectApiName)) {
+      delete r.Name
+    }
+    for (const sf of SYSTEM_FIELDS) {
+      delete r[sf]
+    }
   }
 }
 
-/**
- * Prepare records for upsert: clone, remap parent references, strip source Ids.
- */
 function prepareRecords(
   objectApiName: string,
   records: SfRecord[],
   exportData: { [objectApiName: string]: SfRecord[] }
 ): SfRecord[] {
-  // Deep clone to avoid mutating the export data
   const cloned = records.map((r) => ({ ...r }))
   remapParentReferences(objectApiName, cloned, exportData)
-  stripSourceIds(cloned)
+  stripNonTransferableFields(objectApiName, cloned)
   return cloned
 }
 
@@ -379,7 +435,6 @@ export async function importBundle(
   exportFilePath: string,
   emitProgress: (e: ProgressEvent) => void
 ): Promise<ImportSummary> {
-  // ─── Load export file ────────────────────────────────────────────────────
   logInfo(`Loading export file: ${exportFilePath}`)
   const raw = readFileSync(exportFilePath, 'utf-8')
   const bundle: BundleExport = JSON.parse(raw)
@@ -392,7 +447,6 @@ export async function importBundle(
     failedRecords: []
   }
 
-  /** Upsert an object, update summary, emit progress. */
   async function upsertObject(objectApiName: string, records: SfRecord[]): Promise<void> {
     if (records.length === 0) {
       logInfo(`${objectApiName}: no records to upsert`)
@@ -406,12 +460,23 @@ export async function importBundle(
     summary.succeeded += result.succeeded
     summary.failed += result.failed.length
     summary.byObject[objectApiName] = {
-      created: result.succeeded,
+      created: result.created,
+      updated: result.updated,
       failed: result.failed.length
     }
     summary.failedRecords.push(...result.failed)
 
-    logInfo(`${objectApiName}: ${result.succeeded} succeeded, ${result.failed.length} failed`)
+    logInfo(`Upserted ${result.succeeded} records to ${objectApiName} — ${result.created} created, ${result.updated} updated, ${result.failed.length} failed`)
+
+    if (result.failed.length > 0) {
+      const uniqueErrors = new Map<string, number>()
+      for (const f of result.failed) {
+        uniqueErrors.set(f.error, (uniqueErrors.get(f.error) ?? 0) + 1)
+      }
+      for (const [errMsg, count] of uniqueErrors) {
+        logWarn(`  ${objectApiName} failure (${count}x): ${errMsg}`)
+      }
+    }
 
     emitProgress({
       stage: 'import',
@@ -419,41 +484,45 @@ export async function importBundle(
       total: records.length,
       succeeded: result.succeeded,
       failed: result.failed.length,
-      status: result.failed.length > 0 ? 'partial' : 'success'
+      created: result.created,
+      updated: result.updated,
+      status: result.failed.length > 0 ? 'partial' : 'success',
+      message: result.failed.length > 0
+        ? `${result.failed.length} records failed — dependent objects in later phases may also fail due to missing parent records`
+        : undefined
     })
   }
 
-  // ─── Phase 0: Resolve reference data ─────────────────────────────────────
+  // ─── Step 0: Resolve reference data & upsert Classifications ──────────
 
-  logInfo('Resolving reference data in target org')
+  logInfo('Step 0 — Resolving reference data & upserting Classifications')
   const resolved = await resolveReferences(conn, bundle.referenceData, emitProgress)
 
-  // ─── Phase 2: Bundle ─────────────────────────────────────────────────────
+  // Upsert classifications that were extracted (excluding nCino Standard Tags)
+  const classRecords = bundle.records['LLC_BI__Classification__c'] ?? []
+  if (classRecords.length > 0) {
+    await upsertObject('LLC_BI__Classification__c', classRecords)
+  }
 
-  logInfo('Phase 2 — Upserting bundle')
+  // ─── Step 1: Bundle ───────────────────────────────────────────────────
+
+  logInfo('Step 1 — Upserting bundle')
   const bundleRecords = bundle.records['LLC_BI__Underwriting_Bundle__c'] ?? []
   for (const rec of bundleRecords) {
-    // Null out backfill field
     rec.LLC_BI__Source_Template__c = null
 
-    // Replace Financial_Consolidation__c with resolved target Id
     if (rec.LLC_BI__Financial_Consolidation__c && resolved.financialConsolidationId) {
       rec.LLC_BI__Financial_Consolidation__c = resolved.financialConsolidationId
     } else {
       delete rec.LLC_BI__Financial_Consolidation__c
     }
 
-    // Replace LLC_BI__Relationship__c via __r (Account lookupKey)
     const relationshipId = rec.LLC_BI__Relationship__c as string | undefined
     if (relationshipId) {
       delete rec.LLC_BI__Relationship__c
       rec['LLC_BI__Relationship__r'] = { LLC_BI__lookupKey__c: relationshipId }
-      // Note: Account uses LLC_BI__lookupKey__c — the source Id was stored;
-      // we need the actual lookupKey. Since Account is external reference data
-      // not in our export, we leave it to the external ID resolution.
     }
 
-    // Replace LLC_BI__Collateral__c via __r
     const collateralId = rec.LLC_BI__Collateral__c as string | undefined
     if (collateralId) {
       delete rec.LLC_BI__Collateral__c
@@ -462,169 +531,213 @@ export async function importBundle(
   }
   await upsertObject('LLC_BI__Underwriting_Bundle__c', bundleRecords)
 
-  // ─── Phase 3: Statement Types ────────────────────────────────────────────
+  // ─── Step 2: Statement Types (first pass — no common sizing refs) ─────
 
-  logInfo('Phase 3 — Upserting Statement Types')
+  logInfo('Step 2 — Upserting Statement Types')
   const stRecords = bundle.records['LLC_BI__Spread_Statement_Type__c'] ?? []
   for (const rec of stRecords) {
-    // Null out backfill fields
     rec.LLC_BI__Calc_Common_Sizing_Record__c = null
     rec.LLC_BI__Calc_Common_Sizing_Total_Group__c = null
   }
   await upsertObject('LLC_BI__Spread_Statement_Type__c', stRecords)
 
-  // ─── Phase 4: Record Totals, then Periods ────────────────────────────────
+  // ─── Step 3: Record Totals ────────────────────────────────────────────
 
-  logInfo('Phase 4 — Upserting Record Totals & Periods')
+  logInfo('Step 3 — Upserting Record Totals')
   await upsertObject(
     'LLC_BI__Spread_Statement_Record_Total__c',
     bundle.records['LLC_BI__Spread_Statement_Record_Total__c'] ?? []
   )
-  await upsertObject(
-    'LLC_BI__Spread_Statement_Period__c',
-    bundle.records['LLC_BI__Spread_Statement_Period__c'] ?? []
-  )
 
-  // ─── Phase 5: Records ────────────────────────────────────────────────────
+  // ─── Step 4: Records (first pass — no linked refs) ────────────────────
 
-  logInfo('Phase 5 — Upserting Records')
+  logInfo('Step 4 — Upserting Records (first pass)')
   const recRecords = bundle.records['LLC_BI__Spread_Statement_Record__c'] ?? []
   for (const rec of recRecords) {
-    // Null out backfill fields
     rec.LLC_BI__Linked_Spread_Statement_Record__c = null
     rec.LLC_BI__Linked_Spread_Statement_Total_Group__c = null
     rec.LLC_BI__Associated_Parent_Record__c = null
   }
   await upsertObject('LLC_BI__Spread_Statement_Record__c', recRecords)
 
-  // ─── Phase 6: Backfill ───────────────────────────────────────────────────
+  // ─── Step 5: Records backfill (second pass — linked refs) ─────────────
 
-  logInfo('Phase 6 — Backfill')
-
-  // Phase 6a — Backfill LLC_BI__Spread_Statement_Record__c
+  logInfo('Step 5 — Backfill Records (linked refs)')
   await backfillRecords(conn, bundle, resolved, emitProgress)
 
-  // Phase 6b — Backfill LLC_BI__Spread_Statement_Type__c
+  // ─── Step 6: Statement Types backfill (common sizing) ─────────────────
+
+  logInfo('Step 6 — Backfill Statement Types (common sizing)')
   await backfillStatementTypes(conn, bundle, emitProgress)
 
-  // Phase 6c — Backfill LLC_BI__Underwriting_Bundle__c Source_Template__c
+  // ─── Step 6c: Bundle Source_Template backfill ─────────────────────────
+
   await backfillBundleSourceTemplate(conn, bundle, emitProgress)
 
-  // ─── Phase 7: Junctions & Leaves ─────────────────────────────────────────
+  // ─── Step 7: Record Classifications ───────────────────────────────────
 
-  logInfo('Phase 7 — Junctions and leaves')
-
-  // 6. Record Values
+  logInfo('Step 7 — Upserting Record Classifications')
   await upsertObject(
-    'LLC_BI__Spread_Statement_Record_Value__c',
-    bundle.records['LLC_BI__Spread_Statement_Record_Value__c'] ?? []
+    'LLC_BI__Spread_Record_Classification__c',
+    bundle.records['LLC_BI__Spread_Record_Classification__c'] ?? []
   )
 
-  // 7. Period Totals
-  await upsertObject(
-    'LLC_BI__Spread_Statement_Period_Total__c',
-    bundle.records['LLC_BI__Spread_Statement_Period_Total__c'] ?? []
-  )
+  // ─── Step 8: Record Total Classifications ─────────────────────────────
 
-  // 8. Record Groups
-  await upsertObject(
-    'LLC_BI__Spread_Statement_Record_Group__c',
-    bundle.records['LLC_BI__Spread_Statement_Record_Group__c'] ?? []
-  )
-
-  // 9. Record Classifications
-  const rcRecords = bundle.records['LLC_BI__Spread_Record_Classification__c'] ?? []
-  // Replace LLC_BI__Classification__c with resolved target Id
-  for (const rec of rcRecords) {
-    const classificationId = rec.LLC_BI__Classification__c as string | undefined
-    if (classificationId) {
-      // classificationId here is the source org Id; we need to look up by Name.
-      // The export doesn't carry classification Name on the junction, so we
-      // skip direct replacement — the upsert via lookupKey handles the junction.
-      // Classification is reference data resolved separately.
-    }
-  }
-  await upsertObject('LLC_BI__Spread_Record_Classification__c', rcRecords)
-
-  // 10. Record Total Classifications
+  logInfo('Step 8 — Upserting Record Total Classifications')
   await upsertObject(
     'LLC_BI__Spread_Record_Total_Classification__c',
     bundle.records['LLC_BI__Spread_Record_Total_Classification__c'] ?? []
   )
 
-  // 11. Row Mappings
+  // ─── Step 9: Tenant Information ───────────────────────────────────────
+
+  logInfo('Step 9 — Upserting Tenant Information')
+  await upsertObject(
+    'LLC_BI__Tenant_Information__c',
+    bundle.records['LLC_BI__Tenant_Information__c'] ?? []
+  )
+
+  // ─── Step 10: Sensitivity Analysis ────────────────────────────────────
+
+  logInfo('Step 10 — Upserting Sensitivity Analysis')
+  await upsertObject(
+    'LLC_BI__Sensitivity_Analysis__c',
+    bundle.records['LLC_BI__Sensitivity_Analysis__c'] ?? []
+  )
+
+  // ─── Step 11: Loan Assumptions ────────────────────────────────────────
+
+  logInfo('Step 11 — Upserting Loan Assumptions')
+  await upsertObject(
+    'LLC_BI__Loan_Assumptions__c',
+    bundle.records['LLC_BI__Loan_Assumptions__c'] ?? []
+  )
+
+  // ─── Step 12: Record Values ───────────────────────────────────────────
+
+  logInfo('Step 12 — Upserting Record Values')
+  await upsertObject(
+    'LLC_BI__Spread_Statement_Record_Value__c',
+    bundle.records['LLC_BI__Spread_Statement_Record_Value__c'] ?? []
+  )
+
+  // ─── Step 12b: Period Totals ──────────────────────────────────────────
+
+  logInfo('Step 12b — Upserting Period Totals')
+  await upsertObject(
+    'LLC_BI__Spread_Statement_Period_Total__c',
+    bundle.records['LLC_BI__Spread_Statement_Period_Total__c'] ?? []
+  )
+
+  // ─── Step 12c: Periods ────────────────────────────────────────────────
+
+  logInfo('Step 12c — Upserting Periods')
+  await upsertObject(
+    'LLC_BI__Spread_Statement_Period__c',
+    bundle.records['LLC_BI__Spread_Statement_Period__c'] ?? []
+  )
+
+  // ─── Step 12d: Record Groups ──────────────────────────────────────────
+
+  logInfo('Step 12d — Upserting Record Groups')
+  await upsertObject(
+    'LLC_BI__Spread_Statement_Record_Group__c',
+    bundle.records['LLC_BI__Spread_Statement_Record_Group__c'] ?? []
+  )
+
+  // ─── Step 12e: Row Mappings ───────────────────────────────────────────
+
+  logInfo('Step 12e — Upserting Row Mappings')
   await upsertObject(
     'LLC_BI__Spread_Statement_Row_Mapping__c',
     bundle.records['LLC_BI__Spread_Statement_Row_Mapping__c'] ?? []
   )
 
-  // 12. Projection Bundle Junctions
-  const pbjRecords = bundle.records['LLC_BI__Projection_Bundle_Junction__c'] ?? []
-  // Replace LLC_BI__Projection_Template__c with resolved target Id
-  for (const rec of pbjRecords) {
-    const templateId = rec.LLC_BI__Projection_Template__c as string | undefined
-    if (templateId) {
-      // Look up the template's lookupKey from the export reference data,
-      // then resolve to the target Id
-      const targetId = resolveProjectionTemplateId(templateId, bundle, resolved)
-      if (targetId) {
-        rec.LLC_BI__Projection_Template__c = targetId
-      }
-    }
-  }
-  await upsertObject('LLC_BI__Projection_Bundle_Junction__c', pbjRecords)
+  // ─── Step 12f: Period Consolidations ──────────────────────────────────
 
-  // 13. Period Consolidations
+  logInfo('Step 12f — Upserting Period Consolidations')
   await upsertObject(
     'LLC_BI__Period_Consolidation__c',
     bundle.records['LLC_BI__Period_Consolidation__c'] ?? []
   )
 
-  // 14. Projections Drivers
+  // ─── Step 13: Projections Templates ───────────────────────────────────
+
+  logInfo('Step 13 — Upserting Projections Templates')
+  await upsertObject(
+    'LLC_BI__Spread_Projections_Template__c',
+    bundle.records['LLC_BI__Spread_Projections_Template__c'] ?? []
+  )
+
+  // ─── Step 14: Projection Bundle Junctions ─────────────────────────────
+
+  logInfo('Step 14 — Upserting Projection Bundle Junctions')
+  await upsertObject(
+    'LLC_BI__Projection_Bundle_Junction__c',
+    bundle.records['LLC_BI__Projection_Bundle_Junction__c'] ?? []
+  )
+
+  // ─── Step 15: Projections Drivers ─────────────────────────────────────
+
+  logInfo('Step 15 — Upserting Projections Drivers')
   await upsertObject(
     'LLC_BI__Spread_Projections_Driver__c',
     bundle.records['LLC_BI__Spread_Projections_Driver__c'] ?? []
   )
 
-  // ─── Phase 8: Schedules ─────────────────────────────────────────────────
+  // ─── Step 20: Schedules ───────────────────────────────────────────────
 
-  logInfo('Phase 8 — Upserting Schedules')
-
-  // 15. Schedules
+  logInfo('Step 20 — Upserting Schedules')
   const schedRecords = bundle.records['LLC_BI__Schedule__c'] ?? []
   for (const rec of schedRecords) {
     rec.LLC_BI__Source_Schedule__c = null
   }
   await upsertObject('LLC_BI__Schedule__c', schedRecords)
 
-  // 16. Schedule Entries
+  // ─── Step 20b: Schedule Entries ───────────────────────────────────────
+
+  logInfo('Step 20b — Upserting Schedule Entries')
   await upsertObject(
     'LLC_BI__Schedule_Entry__c',
     bundle.records['LLC_BI__Schedule_Entry__c'] ?? []
   )
 
-  // ─── Phase 9: Debt Schedules ────────────────────────────────────────────
+  // ─── Step 21: Schedule Sections (Schedule-owned) ──────────────────────
 
-  logInfo('Phase 9 — Upserting Debt Schedules')
+  logInfo('Step 21 — Upserting Schedule Sections (Schedule-owned)')
+  const allSections = bundle.records['LLC_BI__Schedule_Section__c'] ?? []
+  const scheduleOwnedSections = allSections.filter((r) => !!r.LLC_BI__Schedule__c)
+  const debtOwnedSections = allSections.filter((r) => !!r.LLC_BI__Debt_Schedule__c)
 
-  // 17. Debt Schedules
+  for (const rec of scheduleOwnedSections) {
+    rec.LLC_BI__Source_Section__c = null
+  }
+  await upsertScheduleSections(conn, scheduleOwnedSections, bundle.records, summary, emitProgress, 'LLC_BI__Schedule_Section__c (Schedule)')
+
+  // ─── Step 23: Debt Schedules ──────────────────────────────────────────
+
+  logInfo('Step 23 — Upserting Debt Schedules')
   const dsRecords = bundle.records['LLC_BI__Debt_Schedule__c'] ?? []
   for (const rec of dsRecords) {
     rec.LLC_BI__Source_Debt_Schedule__c = null
   }
   await upsertObject('LLC_BI__Debt_Schedule__c', dsRecords)
 
-  // 18. Debts (parent)
+  // ─── Step 23b: Debts (parent) ─────────────────────────────────────────
+
+  logInfo('Step 23b — Upserting Debts (parent)')
   const debtRecords = bundle.records['LLC_BI__Debt__c'] ?? []
   for (const rec of debtRecords) {
     rec.LLC_BI__Source_Debt__c = null
   }
   await upsertObject('LLC_BI__Debt__c', debtRecords)
 
-  // 19. Debts (internal) — stored under 'LLC_BI__Debt_Internal__c' key, upserted to LLC_BI__Debt__c
+  // ─── Step 23c: Debts (internal) ───────────────────────────────────────
+
   const internalDebtRecords = bundle.records['LLC_BI__Debt_Internal__c'] ?? []
   if (internalDebtRecords.length > 0) {
-    logInfo('Resolving LLC_BI__Internal_Debt__c for internal debts')
+    logInfo('Step 23c — Upserting Debts (internal)')
     const parentDebtLookupKeys = debtRecords
       .map((r) => r.LLC_BI__lookupKey__c as string)
       .filter(Boolean)
@@ -649,24 +762,26 @@ export async function importBundle(
         }
       }
     }
-    // Upsert to the actual LLC_BI__Debt__c object
     const internalPrepared = prepareRecords('LLC_BI__Debt__c', internalDebtRecords, bundle.records)
     const internalResult = await upsertBatch(conn, 'LLC_BI__Debt__c', internalPrepared)
     summary.totalRecords += internalDebtRecords.length
     summary.succeeded += internalResult.succeeded
     summary.failed += internalResult.failed.length
     summary.byObject['LLC_BI__Debt_Internal__c'] = {
-      created: internalResult.succeeded,
+      created: internalResult.created,
+      updated: internalResult.updated,
       failed: internalResult.failed.length
     }
     summary.failedRecords.push(...internalResult.failed)
-    logInfo(`LLC_BI__Debt__c (internal): ${internalResult.succeeded} succeeded, ${internalResult.failed.length} failed`)
+    logInfo(`Upserted ${internalResult.succeeded} records to LLC_BI__Debt__c (internal) — ${internalResult.created} created, ${internalResult.updated} updated, ${internalResult.failed.length} failed`)
     emitProgress({
       stage: 'import',
       object: 'LLC_BI__Debt_Internal__c',
       total: internalDebtRecords.length,
       succeeded: internalResult.succeeded,
       failed: internalResult.failed.length,
+      created: internalResult.created,
+      updated: internalResult.updated,
       status: internalResult.failed.length > 0 ? 'partial' : 'success'
     })
   } else {
@@ -676,29 +791,21 @@ export async function importBundle(
       total: 0,
       succeeded: 0,
       failed: 0,
+      created: 0,
+      updated: 0,
       status: 'success'
     })
   }
 
-  // 20. Schedule Sections (all — both schedule- and debt-schedule-owned)
-  const sectionRecords = bundle.records['LLC_BI__Schedule_Section__c'] ?? []
-  for (const rec of sectionRecords) {
+  // ─── Step 24: Schedule Sections (Debt-owned) ─────────────────────────
+
+  logInfo('Step 24 — Upserting Schedule Sections (Debt-owned)')
+  for (const rec of debtOwnedSections) {
     rec.LLC_BI__Source_Section__c = null
   }
-  // Polymorphic parent resolution: remap whichever parent lookup is populated
-  await upsertScheduleSections(conn, sectionRecords, bundle.records, summary, emitProgress)
+  await upsertScheduleSections(conn, debtOwnedSections, bundle.records, summary, emitProgress, 'LLC_BI__Schedule_Section__c (Debt)')
 
-  // ─── Phase 10: Loan Assumptions ─────────────────────────────────────────
-
-  logInfo('Phase 10 — Upserting Loan Assumptions')
-
-  // 21. Loan Assumptions
-  await upsertObject(
-    'LLC_BI__Loan_Assumptions__c',
-    bundle.records['LLC_BI__Loan_Assumptions__c'] ?? []
-  )
-
-  // ─── Complete ────────────────────────────────────────────────────────────
+  // ─── Complete ─────────────────────────────────────────────────────────
 
   emitProgress({
     stage: 'complete',
@@ -710,22 +817,25 @@ export async function importBundle(
   return summary
 }
 
-// ─── Polymorphic Schedule Section upsert ─────────────────────────────────────
+// ─── Polymorphic Schedule Section upsert ────────────────────────────────────
 
 async function upsertScheduleSections(
   conn: Connection,
   records: SfRecord[],
   exportData: { [objectApiName: string]: SfRecord[] },
   summary: ImportSummary,
-  emitProgress: (e: ProgressEvent) => void
+  emitProgress: (e: ProgressEvent) => void,
+  label: string
 ): Promise<void> {
   if (records.length === 0) {
     emitProgress({
       stage: 'import',
-      object: 'LLC_BI__Schedule_Section__c',
+      object: label,
       total: 0,
       succeeded: 0,
       failed: 0,
+      created: 0,
+      updated: 0,
       status: 'success'
     })
     return
@@ -737,7 +847,6 @@ async function upsertScheduleSections(
 
   const cloned = records.map((r) => ({ ...r }))
   for (const rec of cloned) {
-    // Polymorphic: remap whichever parent is populated
     const schedId = rec.LLC_BI__Schedule__c as string | undefined | null
     if (schedId) {
       const lookupKey = scheduleCache.get(schedId)
@@ -756,7 +865,6 @@ async function upsertScheduleSections(
       }
     }
 
-    // Remap Spread_Statement_Record reference if present
     const recId = rec.LLC_BI__Spread_Statement_Record__c as string | undefined | null
     if (recId) {
       const lookupKey = recordCache.get(recId)
@@ -767,30 +875,33 @@ async function upsertScheduleSections(
     }
   }
 
-  stripSourceIds(cloned)
+  stripNonTransferableFields('LLC_BI__Schedule_Section__c', cloned)
   const result = await upsertBatch(conn, 'LLC_BI__Schedule_Section__c', cloned)
 
   summary.totalRecords += records.length
   summary.succeeded += result.succeeded
   summary.failed += result.failed.length
-  summary.byObject['LLC_BI__Schedule_Section__c'] = {
-    created: result.succeeded,
+  summary.byObject[label] = {
+    created: result.created,
+    updated: result.updated,
     failed: result.failed.length
   }
   summary.failedRecords.push(...result.failed)
 
-  logInfo(`LLC_BI__Schedule_Section__c: ${result.succeeded} succeeded, ${result.failed.length} failed`)
+  logInfo(`Upserted ${result.succeeded} records to ${label} — ${result.created} created, ${result.updated} updated, ${result.failed.length} failed`)
   emitProgress({
     stage: 'import',
-    object: 'LLC_BI__Schedule_Section__c',
+    object: label,
     total: records.length,
     succeeded: result.succeeded,
     failed: result.failed.length,
+    created: result.created,
+    updated: result.updated,
     status: result.failed.length > 0 ? 'partial' : 'success'
   })
 }
 
-// ─── Backfill helpers ────────────────────────────────────────────────────────
+// ─── Backfill helpers ───────────────────────────────────────────────────────
 
 async function backfillRecords(
   conn: Connection,
@@ -802,20 +913,17 @@ async function backfillRecords(
   const lookupKeys = Object.keys(backfill)
   if (lookupKeys.length === 0) return
 
-  logInfo(`Backfill Phase 6a — ${lookupKeys.length} record(s) to backfill`)
+  logInfo(`Backfill Step 5 — ${lookupKeys.length} record(s) to backfill`)
 
-  // Resolve all record lookupKeys + all referenced lookupKeys to target Ids
   const allKeysNeeded = new Set(lookupKeys)
   for (const fields of Object.values(backfill)) {
     for (const sourceId of Object.values(fields)) {
-      // sourceId is a source org Id — find its lookupKey from the export
       const exportRecords = bundle.records['LLC_BI__Spread_Statement_Record__c'] ?? []
       const match = exportRecords.find((r) => r.Id === sourceId)
       if (match) {
         const key = match.LLC_BI__lookupKey__c as string | undefined
         if (key) allKeysNeeded.add(key)
       }
-      // Also check Record Totals for LLC_BI__Linked_Spread_Statement_Total_Group__c
       const totalRecords = bundle.records['LLC_BI__Spread_Statement_Record_Total__c'] ?? []
       const totalMatch = totalRecords.find((r) => r.Id === sourceId)
       if (totalMatch) {
@@ -825,20 +933,17 @@ async function backfillRecords(
     }
   }
 
-  // Resolve Spread_Statement_Record lookupKeys to target Ids
   const recordKeyMap = await resolveIdByLookupKey(
     conn,
     'LLC_BI__Spread_Statement_Record__c',
     [...allKeysNeeded]
   )
-  // Also resolve Record Total keys
   const totalKeyMap = await resolveIdByLookupKey(
     conn,
     'LLC_BI__Spread_Statement_Record_Total__c',
     [...allKeysNeeded]
   )
 
-  // Merge maps (record Ids take precedence, but total Ids fill in gaps)
   const combinedMap = new Map([...totalKeyMap, ...recordKeyMap])
 
   const updatePayloads: Record<string, unknown>[] = []
@@ -851,7 +956,6 @@ async function backfillRecords(
 
     const payload: Record<string, unknown> = { Id: targetId }
     for (const [fieldName, sourceId] of Object.entries(fields)) {
-      // Find the lookupKey for this source Id
       const exportRecords = bundle.records['LLC_BI__Spread_Statement_Record__c'] ?? []
       const match = exportRecords.find((r) => r.Id === sourceId)
       const totalRecords = bundle.records['LLC_BI__Spread_Statement_Record_Total__c'] ?? []
@@ -903,16 +1007,14 @@ async function backfillStatementTypes(
   const lookupKeys = Object.keys(backfill)
   if (lookupKeys.length === 0) return
 
-  logInfo(`Backfill Phase 6b — ${lookupKeys.length} statement type(s) to backfill`)
+  logInfo(`Backfill Step 6 — ${lookupKeys.length} statement type(s) to backfill`)
 
-  // Resolve statement type lookupKeys to target Ids
   const stKeyMap = await resolveIdByLookupKey(
     conn,
     'LLC_BI__Spread_Statement_Type__c',
     lookupKeys
   )
 
-  // Resolve record and record total lookupKeys referenced in backfill values
   const allRefKeys = new Set<string>()
   for (const fields of Object.values(backfill)) {
     for (const sourceId of Object.values(fields)) {
@@ -1003,9 +1105,8 @@ async function backfillBundleSourceTemplate(
   const sourceTemplateValue = bundle.backfillData.bundleSourceTemplate
   if (!sourceTemplateValue) return
 
-  logInfo('Backfill Phase 6c — Bundle Source_Template__c')
+  logInfo('Backfill — Bundle Source_Template__c')
 
-  // Resolve the bundle's target Id by lookupKey
   const bundleKeyMap = await resolveIdByLookupKey(
     conn,
     'LLC_BI__Underwriting_Bundle__c',
@@ -1024,11 +1125,6 @@ async function backfillBundleSourceTemplate(
     return
   }
 
-  // sourceTemplateValue is a source-org Id referencing another bundle.
-  // Find its lookupKey from the export or try resolving directly.
-  // Since the source template may be a different bundle entirely (not in our export),
-  // try resolving by lookupKey if it's already in the target.
-  // If the source template bundle was also extracted, its lookupKey would be available.
   const exportBundles = bundle.records['LLC_BI__Underwriting_Bundle__c'] ?? []
   const templateBundle = exportBundles.find((r) => r.Id === sourceTemplateValue)
   let resolvedTemplateId: string | undefined
@@ -1067,28 +1163,3 @@ async function backfillBundleSourceTemplate(
   })
 }
 
-// ─── Projection Template resolution helper ───────────────────────────────────
-
-/**
- * Given a source org Id for a Projection Template, look up its lookupKey
- * from the export's reference data, then resolve to the target Id.
- */
-function resolveProjectionTemplateId(
-  sourceTemplateId: string,
-  bundle: BundleExport,
-  resolved: ResolvedReferences
-): string | undefined {
-  // The export's projection junction records contain source Ids.
-  // The reference data has lookupKeys for each template.
-  // We need to find which lookupKey corresponds to this source Id.
-  // Since we don't have a direct sourceId→lookupKey mapping in reference data,
-  // we try all resolved keys and see if any match.
-  // This is a best-effort approach.
-  for (const [lookupKey, targetId] of resolved.projectionsTemplatesByKey) {
-    // If there's only one template, or if the junction only has one, use it
-    if (bundle.referenceData.projectionsTemplateLookupKeys.includes(lookupKey)) {
-      return targetId
-    }
-  }
-  return undefined
-}

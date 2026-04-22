@@ -241,6 +241,9 @@ export default function App(): React.ReactElement {
                 }
               }}
               onStartOver={resetAll}
+              onFileRenamed={(newPath) => {
+                setBundleExport({ ...bundleExport, exportFilePath: newPath })
+              }}
             />
           )}
 

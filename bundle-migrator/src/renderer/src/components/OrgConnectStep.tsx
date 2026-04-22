@@ -3,12 +3,15 @@ import { Box, Flex, Heading, Text, Button, Badge, TextField, IconButton } from '
 import type { AppMode, OrgStatus, OrgCredentials, AllCredentials } from '../../../shared/types'
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error'
+type AuthMethod = 'credentials' | 'session'
 
 const EMPTY_CREDS: OrgCredentials = {
   username: '',
   password: '',
   token: '',
-  loginUrl: 'https://login.salesforce.com'
+  loginUrl: 'https://login.salesforce.com',
+  accessToken: '',
+  instanceUrl: ''
 }
 
 interface Props {
@@ -65,6 +68,10 @@ function CredentialField({
   )
 }
 
+function detectAuthMethod(creds: OrgCredentials): AuthMethod {
+  return creds.accessToken && creds.instanceUrl ? 'session' : 'credentials'
+}
+
 function OrgPanel({
   title,
   creds,
@@ -84,6 +91,8 @@ function OrgPanel({
   errorMessage?: string
   optional?: boolean
 }): React.ReactElement {
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(detectAuthMethod(creds))
+
   const statusBadge = (): React.ReactElement => {
     switch (status) {
       case 'idle':
@@ -97,6 +106,10 @@ function OrgPanel({
     }
   }
 
+  const canConnect = authMethod === 'session'
+    ? !!(creds.accessToken && creds.instanceUrl)
+    : !!creds.username
+
   return (
     <Box flexGrow="1" p="4" style={{ border: '1px solid var(--gray-6)', borderRadius: 'var(--radius-3)' }}>
       <Flex direction="column" gap="3">
@@ -104,28 +117,66 @@ function OrgPanel({
           <Heading size="4">{title}</Heading>
           {statusBadge()}
         </Flex>
-        <CredentialField
-          label="Username"
-          value={creds.username}
-          onChange={(v) => onChange({ ...creds, username: v })}
-        />
-        <CredentialField
-          label="Password"
-          value={creds.password}
-          onChange={(v) => onChange({ ...creds, password: v })}
-          isSecret
-        />
-        <CredentialField
-          label="Security Token"
-          value={creds.token}
-          onChange={(v) => onChange({ ...creds, token: v })}
-          isSecret
-        />
-        <CredentialField
-          label="Login URL"
-          value={creds.loginUrl}
-          onChange={(v) => onChange({ ...creds, loginUrl: v })}
-        />
+        <Flex gap="2">
+          <Button
+            size="1"
+            variant={authMethod === 'credentials' ? 'solid' : 'soft'}
+            onClick={() => setAuthMethod('credentials')}
+          >
+            Username / Password
+          </Button>
+          <Button
+            size="1"
+            variant={authMethod === 'session' ? 'solid' : 'soft'}
+            onClick={() => setAuthMethod('session')}
+          >
+            Access Token
+          </Button>
+        </Flex>
+
+        {authMethod === 'credentials' ? (
+          <>
+            <CredentialField
+              label="Username"
+              value={creds.username}
+              onChange={(v) => onChange({ ...creds, username: v })}
+            />
+            <CredentialField
+              label="Password"
+              value={creds.password}
+              onChange={(v) => onChange({ ...creds, password: v })}
+              isSecret
+            />
+            <CredentialField
+              label="Security Token"
+              value={creds.token}
+              onChange={(v) => onChange({ ...creds, token: v })}
+              isSecret
+            />
+            <CredentialField
+              label="Login URL"
+              value={creds.loginUrl}
+              onChange={(v) => onChange({ ...creds, loginUrl: v })}
+            />
+          </>
+        ) : (
+          <>
+            <CredentialField
+              label="Access Token"
+              value={creds.accessToken ?? ''}
+              onChange={(v) => onChange({ ...creds, accessToken: v })}
+              isSecret
+            />
+            <CredentialField
+              label="Instance URL"
+              value={creds.instanceUrl ?? ''}
+              onChange={(v) => onChange({ ...creds, instanceUrl: v })}
+            />
+            <Text size="1" color="gray">
+              Run &quot;sf org display&quot; to get these values from your scratch org.
+            </Text>
+          </>
+        )}
         {errorMessage && status === 'error' && (
           <Text size="1" color="red">{errorMessage}</Text>
         )}
@@ -136,7 +187,7 @@ function OrgPanel({
           <Button
             size="2"
             onClick={onConnect}
-            disabled={status === 'connecting' || !creds.username}
+            disabled={status === 'connecting' || !canConnect}
           >
             {status === 'connecting' ? 'Connecting...' : 'Connect'}
           </Button>

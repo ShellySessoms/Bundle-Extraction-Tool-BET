@@ -81,6 +81,8 @@ export interface ProgressEvent {
   total?: number
   succeeded?: number
   failed?: number
+  created?: number
+  updated?: number
   status: 'success' | 'error' | 'partial'
   message?: string
 }
@@ -91,6 +93,8 @@ export interface OrgCredentials {
   password: string
   token: string
   loginUrl: string
+  accessToken?: string
+  instanceUrl?: string
 }
 
 /** All credentials for both orgs */
@@ -187,11 +191,23 @@ export interface FieldDiff {
   valueB: unknown
 }
 
+/** Manifest for future provisioning support */
+export interface ManifestConfig {
+  version: string
+  sourceApiVersion: string
+  components: {
+    objectApiName: string
+    externalIdField: string
+    insertOrder: number
+    recordCount: number
+  }[]
+}
+
 /** Summary returned after a bundle import completes */
 export interface ImportSummary {
   totalRecords: number
   succeeded: number
   failed: number
-  byObject: { [objectApiName: string]: { created: number; failed: number } }
+  byObject: { [objectApiName: string]: { created: number; updated: number; failed: number } }
   failedRecords: FailedRecord[]
 }

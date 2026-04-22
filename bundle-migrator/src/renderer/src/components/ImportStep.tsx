@@ -11,6 +11,8 @@ interface LogEntry {
   total: number
   succeeded: number
   failed: number
+  created: number
+  updated: number
   status: 'success' | 'error' | 'partial'
   message?: string
 }
@@ -23,7 +25,7 @@ interface Props {
 
 const PHASE_LABELS: Record<string, string> = {
   resolve: 'Resolving references',
-  import: 'Inserting records',
+  import: 'Upserting records',
   backfill: 'Backfilling circular references',
   complete: 'Complete'
 }
@@ -44,6 +46,8 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
       total: event.total ?? event.count ?? 0,
       succeeded: event.succeeded ?? event.count ?? 0,
       failed: event.failed ?? 0,
+      created: event.created ?? 0,
+      updated: event.updated ?? 0,
       status: event.status,
       message: event.message
     }
@@ -135,6 +139,7 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
                   [{entry.timestamp}] [{entry.stage}]{' '}
                   {entry.object || entry.phase}
                   {entry.total > 0 && ` — ${entry.succeeded}/${entry.total}`}
+                  {(entry.created > 0 || entry.updated > 0) && ` (${entry.created} new, ${entry.updated} updated)`}
                   {entry.failed > 0 && ` (${entry.failed} failed)`}
                   {entry.message ? ` — ${entry.message}` : ''}
                 </Text>

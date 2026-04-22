@@ -31,6 +31,9 @@ const api = {
 
   openFile: (filePath: string): Promise<void> => ipcRenderer.invoke('app:openFile', filePath),
 
+  renameExportFile: (currentPath: string, newFileName: string): Promise<string> =>
+    ipcRenderer.invoke('app:renameExportFile', currentPath, newFileName),
+
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('app:selectDirectory'),
 
   selectBundleFile: (): Promise<string | null> => ipcRenderer.invoke('app:selectBundleFile'),

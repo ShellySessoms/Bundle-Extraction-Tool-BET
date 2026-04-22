@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Box, Flex, Heading, Text, Button } from '@radix-ui/themes'
+import { Box, Flex, Heading, Text, Button, TextField } from '@radix-ui/themes'
 import type { AppMode, BundleExport } from '../../../shared/types'
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
   onNext: () => void
   onBack: () => void
   onStartOver: () => void
+  onFileRenamed?: (newPath: string) => void
 }
 
 function CollapsibleList({
@@ -62,7 +63,50 @@ function CollapsibleList({
   )
 }
 
-export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStartOver }: Props): React.ReactElement {
+export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStartOver, onFileRenamed }: Props): React.ReactElement {
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameError, setRenameError] = useState('')
+  const [renaming, setRenaming] = useState(false)
+
+  const currentFileName = bundleExport.exportFilePath.split('/').pop() ?? ''
+  const fileNameWithoutExt = currentFileName.replace(/\.json$/, '')
+
+  const startRename = (): void => {
+    setRenameValue(fileNameWithoutExt)
+    setRenameError('')
+    setIsRenaming(true)
+  }
+
+  const cancelRename = (): void => {
+    setIsRenaming(false)
+    setRenameError('')
+  }
+
+  const confirmRename = async (): Promise<void> => {
+    const trimmed = renameValue.trim()
+    if (!trimmed) {
+      setRenameError('File name cannot be empty.')
+      return
+    }
+    if (trimmed === fileNameWithoutExt) {
+      setIsRenaming(false)
+      return
+    }
+    setRenaming(true)
+    setRenameError('')
+    try {
+      const newPath = await window.api.renameExportFile(bundleExport.exportFilePath, trimmed)
+      bundleExport.exportFilePath = newPath
+      onFileRenamed?.(newPath)
+      setIsRenaming(false)
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   const objectEntries = Object.entries(bundleExport.records)
   const totalRecords = objectEntries.reduce((sum, [, recs]) => sum + recs.length, 0)
   const emptyObjects = objectEntries.filter(([, recs]) => recs.length === 0)
@@ -224,12 +268,46 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
 
       {/* Export file path */}
       <Box p="3" style={{ background: 'var(--gray-2)', borderRadius: 'var(--radius-2)' }}>
-        <Text size="2">
-          <strong>Export file:</strong>{' '}
-          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-            {bundleExport.exportFilePath}
-          </span>
-        </Text>
+        {!isRenaming ? (
+          <Flex align="center" gap="2">
+            <Text size="2" style={{ flex: 1 }}>
+              <strong>Export file:</strong>{' '}
+              <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                {bundleExport.exportFilePath}
+              </span>
+            </Text>
+            <Button variant="ghost" size="1" onClick={startRename} style={{ flexShrink: 0 }}>
+              Rename
+            </Button>
+          </Flex>
+        ) : (
+          <Flex direction="column" gap="2">
+            <Text size="2"><strong>Rename export file:</strong></Text>
+            <Flex align="center" gap="2">
+              <TextField.Root
+                size="2"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmRename()
+                  if (e.key === 'Escape') cancelRename()
+                }}
+                disabled={renaming}
+                style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+              />
+              <Text size="2" color="gray">.json</Text>
+              <Button size="1" onClick={confirmRename} disabled={renaming}>
+                {renaming ? 'Saving…' : 'Save'}
+              </Button>
+              <Button variant="soft" size="1" onClick={cancelRename} disabled={renaming}>
+                Cancel
+              </Button>
+            </Flex>
+            {renameError && (
+              <Text size="1" color="red">{renameError}</Text>
+            )}
+          </Flex>
+        )}
       </Box>
 
       {mode === 'extract-only' && (
@@ -240,6 +318,14 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
               The bundle has been extracted and saved to the file above.
             </Text>
           </Flex>
+        </Box>
+      )}
+
+      {mode !== 'extract-only' && (
+        <Box p="3" style={{ background: 'var(--blue-3)', borderRadius: 'var(--radius-2)' }}>
+          <Text size="2" color="blue">
+            Records with matching lookupKey__c values will be updated in place. New records will be created. No duplicates will be created.
+          </Text>
         </Box>
       )}
 

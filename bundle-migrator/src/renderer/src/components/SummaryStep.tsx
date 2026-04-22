@@ -59,7 +59,10 @@ export default function SummaryStep({ summary, mode, exportFilePath, onStartOver
                 Object
               </th>
               <th style={{ textAlign: 'right', padding: '8px 12px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-5)' }}>
-                Succeeded
+                Created
+              </th>
+              <th style={{ textAlign: 'right', padding: '8px 12px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-5)' }}>
+                Updated
               </th>
               <th style={{ textAlign: 'right', padding: '8px 12px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-5)' }}>
                 Failed
@@ -75,6 +78,9 @@ export default function SummaryStep({ summary, mode, exportFilePath, onStartOver
                 <td style={{ padding: '6px 12px', borderBottom: '1px solid var(--gray-3)', textAlign: 'right' }}>
                   {counts.created}
                 </td>
+                <td style={{ padding: '6px 12px', borderBottom: '1px solid var(--gray-3)', textAlign: 'right' }}>
+                  {counts.updated}
+                </td>
                 <td style={{
                   padding: '6px 12px',
                   borderBottom: '1px solid var(--gray-3)',
@@ -89,7 +95,10 @@ export default function SummaryStep({ summary, mode, exportFilePath, onStartOver
             <tr>
               <td style={{ padding: '8px 12px', fontWeight: 600 }}>Total</td>
               <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
-                {summary.succeeded}
+                {objectEntries.reduce((sum, [, c]) => sum + c.created, 0)}
+              </td>
+              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
+                {objectEntries.reduce((sum, [, c]) => sum + c.updated, 0)}
               </td>
               <td style={{
                 padding: '8px 12px',

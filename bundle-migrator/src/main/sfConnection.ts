@@ -5,6 +5,11 @@ import { resolve, join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { app } from 'electron'
 
+export interface SessionIdentity {
+  username: string
+  organization_id: string
+}
+
 export const envFilePath = resolve(app.getAppPath(), '.env')
 export const credentialsFilePath = join(app.getPath('userData'), 'credentials.json')
 
@@ -15,6 +20,8 @@ export interface SfCredentials {
   password: string
   token: string
   loginUrl: string
+  accessToken?: string
+  instanceUrl?: string
 }
 
 let inMemorySourceCreds: SfCredentials | null = null
@@ -41,7 +48,9 @@ function getSourceCredentials(): SfCredentials {
     username: process.env.SOURCE_SF_USERNAME ?? '',
     password: process.env.SOURCE_SF_PASSWORD ?? '',
     token: process.env.SOURCE_SF_TOKEN ?? '',
-    loginUrl: process.env.SOURCE_SF_LOGIN_URL ?? 'https://login.salesforce.com'
+    loginUrl: process.env.SOURCE_SF_LOGIN_URL ?? 'https://login.salesforce.com',
+    accessToken: process.env.SOURCE_SF_ACCESS_TOKEN ?? '',
+    instanceUrl: process.env.SOURCE_SF_INSTANCE_URL ?? ''
   }
 }
 
@@ -51,7 +60,9 @@ function getTargetCredentials(): SfCredentials {
     username: process.env.TARGET_SF_USERNAME ?? '',
     password: process.env.TARGET_SF_PASSWORD ?? '',
     token: process.env.TARGET_SF_TOKEN ?? '',
-    loginUrl: process.env.TARGET_SF_LOGIN_URL ?? 'https://login.salesforce.com'
+    loginUrl: process.env.TARGET_SF_LOGIN_URL ?? 'https://login.salesforce.com',
+    accessToken: process.env.TARGET_SF_ACCESS_TOKEN ?? '',
+    instanceUrl: process.env.TARGET_SF_INSTANCE_URL ?? ''
   }
 }
 
@@ -70,6 +81,20 @@ export function getAllCredentials(): { source: SfCredentials; target: SfCredenti
 }
 
 async function connect(creds: SfCredentials): Promise<Connection> {
+  if (creds.accessToken && creds.instanceUrl) {
+    const token = creds.accessToken.trim()
+    const instance = creds.instanceUrl.trim().replace(/\/+$/, '')
+    const conn = new Connection({
+      instanceUrl: instance,
+      accessToken: token,
+      version: '62.0'
+    })
+    // Validate the session with a lightweight REST call instead of identity(),
+    // which appends the token as a query param that some orgs reject.
+    await conn.request({ method: 'GET', url: `${instance}/services/data/v62.0/limits` })
+    log.info(`Authenticated via access token on ${instance}`)
+    return conn
+  }
   const conn = new Connection({ loginUrl: creds.loginUrl })
   await conn.login(creds.username, creds.password + creds.token)
   log.info(`Authenticated as ${creds.username} on ${creds.loginUrl}`)
@@ -94,14 +119,22 @@ export async function connectTarget(creds?: SfCredentials): Promise<Connection |
     updateTargetCredentials(creds)
   }
   const resolved = getTargetCredentials()
-  if (!resolved.username) {
-    log.info('Target username not set — skipping target connection')
+  if (!resolved.username && !(resolved.accessToken && resolved.instanceUrl)) {
+    log.info('Target credentials not set — skipping target connection')
     return null
   }
   if (!targetConnection) {
     targetConnection = await connect(resolved)
   }
   return targetConnection
+}
+
+export async function resolveIdentity(conn: Connection): Promise<SessionIdentity> {
+  const res = await conn.request({ method: 'GET', url: '/services/oauth2/userinfo' }) as Record<string, unknown>
+  return {
+    username: (res.preferred_username ?? res.email ?? '') as string,
+    organization_id: (res.organization_id ?? '') as string
+  }
 }
 
 export function disconnectAll(): void {

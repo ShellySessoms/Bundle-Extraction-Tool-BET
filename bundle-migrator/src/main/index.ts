@@ -1,11 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
-import { join, dirname } from 'path'
+import { join, dirname, basename, extname } from 'path'
 import { homedir } from 'os'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
 import log from 'electron-log/main'
 import { mkdirSync } from 'fs'
 import type { Connection } from '@jsforce/jsforce-node'
-import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, getAllCredentials, credentialsFilePath } from './sfConnection'
+import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, getAllCredentials, credentialsFilePath, resolveIdentity } from './sfConnection'
 import { extractBundle } from './extractor'
 import { importBundle } from './importer'
 import { compareBundles, comparisonToMarkdown, comparisonToCsv } from './bundleComparator'
@@ -82,7 +82,7 @@ ipcMain.handle(
     try {
       if (creds) updateSourceCredentials(creds)
       const conn = await connectSource()
-      const identity = await conn.identity()
+      const identity = await resolveIdentity(conn)
       saveCredentialsFile()
       return { connected: true, orgId: identity.organization_id, username: identity.username }
     } catch (err) {
@@ -101,7 +101,7 @@ ipcMain.handle(
       if (!conn) {
         return { connected: false, orgId: '', username: 'Not configured' }
       }
-      const identity = await conn.identity()
+      const identity = await resolveIdentity(conn)
       saveCredentialsFile()
       return { connected: true, orgId: identity.organization_id, username: identity.username }
     } catch (err) {
@@ -266,6 +266,29 @@ ipcMain.handle('app:openFile', async (_event, filePath: string) => {
     log.error('app:openFile failed', err)
   }
 })
+
+ipcMain.handle(
+  'app:renameExportFile',
+  async (_event, currentPath: string, newFileName: string): Promise<string> => {
+    try {
+      const dir = dirname(currentPath)
+      const ext = extname(currentPath)
+      const sanitized = newFileName.replace(/[^a-zA-Z0-9_\-. ]/g, '_')
+      const newName = sanitized.endsWith(ext) ? sanitized : `${sanitized}${ext}`
+      const newPath = join(dir, newName)
+      if (newPath === currentPath) return currentPath
+      if (existsSync(newPath)) {
+        throw new Error(`A file named "${basename(newPath)}" already exists in this directory.`)
+      }
+      renameSync(currentPath, newPath)
+      log.info(`Renamed export file: ${basename(currentPath)} → ${newName}`)
+      return newPath
+    } catch (err) {
+      log.error('app:renameExportFile failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
 
 let lastBundleDir = join(homedir(), 'Documents', 'bundle-migrator')
 
