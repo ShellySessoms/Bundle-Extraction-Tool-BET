@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Box, Flex, Heading, Text, Button, TextField } from '@radix-ui/themes'
+import { Box, Flex, Heading, Text, Button, TextField, Checkbox } from '@radix-ui/themes'
 import { Virtuoso } from 'react-virtuoso'
 import type { BundleExport, ProgressEvent } from '../../../shared/types'
 
-const EXPECTED_PROGRESS_EVENTS = 25
+const BASE_PROGRESS_EVENTS = 25
+const PROVISIONING_EXTRA_EVENTS = 2
 const DEFAULT_OUTPUT_DIR = '~/Documents/bundle-migrator/'
 
 interface LogEntry {
@@ -24,12 +25,13 @@ interface Props {
 export default function ExtractStep({ bundleId, existingExport, onNext, onBack }: Props): React.ReactElement {
   const alreadyDone = existingExport !== null
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [completed, setCompleted] = useState(alreadyDone ? EXPECTED_PROGRESS_EVENTS : 0)
+  const [completed, setCompleted] = useState(alreadyDone ? BASE_PROGRESS_EVENTS : 0)
   const [currentObject, setCurrentObject] = useState('')
   const [error, setError] = useState('')
   const [done, setDone] = useState(alreadyDone)
   const [totalRecords, setTotalRecords] = useState(0)
   const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR)
+  const [includeProvisioning, setIncludeProvisioning] = useState(false)
   const [extracting, setExtracting] = useState(alreadyDone)
   const exportRef = useRef<BundleExport | null>(existingExport)
   const startedRef = useRef(alreadyDone)
@@ -58,6 +60,10 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
     }
   }, [handleProgress])
 
+  const expectedEvents = includeProvisioning
+    ? BASE_PROGRESS_EVENTS + PROVISIONING_EXTRA_EVENTS
+    : BASE_PROGRESS_EVENTS
+
   const startExtraction = useCallback(() => {
     if (startedRef.current) return
     startedRef.current = true
@@ -65,10 +71,10 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
     setError('')
     const dir = outputDir === DEFAULT_OUTPUT_DIR ? undefined : outputDir
     window.api
-      .extractBundle(bundleId, dir)
+      .extractBundle({ bundleId, outputDirectory: dir, includeProvisioningData: includeProvisioning })
       .then((result) => {
         exportRef.current = result
-        setCompleted(EXPECTED_PROGRESS_EVENTS)
+        setCompleted(expectedEvents)
         setDone(true)
       })
       .catch((err) => {
@@ -76,14 +82,14 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
         startedRef.current = false
         setError(err instanceof Error ? err.message : String(err))
       })
-  }, [bundleId, outputDir])
+  }, [bundleId, outputDir, includeProvisioning, expectedEvents])
 
   const browseDirectory = async (): Promise<void> => {
     const dir = await window.api.selectDirectory()
     if (dir) setOutputDir(dir)
   }
 
-  const progress = Math.min(100, Math.round((completed / EXPECTED_PROGRESS_EVENTS) * 100))
+  const progress = Math.min(100, Math.round((completed / expectedEvents) * 100))
   const hasErrors = logs.some((l) => l.status === 'error')
 
   return (
@@ -111,6 +117,24 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
           </Button>
         )}
       </Flex>
+
+      {/* Provisioning data checkbox */}
+      <Box>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: extracting || done ? 'default' : 'pointer' }}>
+          <Checkbox
+            checked={includeProvisioning}
+            onCheckedChange={(checked) => setIncludeProvisioning(checked === true)}
+            disabled={extracting || done}
+            style={{ marginTop: 2 }}
+          />
+          <Flex direction="column" gap="1">
+            <Text size="2" weight="medium">Include state provisioning data</Text>
+            <Text size="1" color="gray">
+              Extracts feature flags, feature processes, and custom field requirements needed for scratch org or QA org provisioning.
+            </Text>
+          </Flex>
+        </label>
+      </Box>
 
       {/* Progress bar */}
       <Box>

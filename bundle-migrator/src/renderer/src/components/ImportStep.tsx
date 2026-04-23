@@ -35,7 +35,7 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
   const [currentPhase, setCurrentPhase] = useState('resolve')
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
-  const summaryRef = useRef<ImportSummary | null>(null)
+  const [summary, setSummary] = useState<ImportSummary | null>(null)
 
   const handleProgress = useCallback((event: ProgressEvent) => {
     const entry: LogEntry = {
@@ -75,7 +75,7 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
     window.api
       .importBundle(exportFilePath)
       .then((result) => {
-        summaryRef.current = result
+        setSummary(result)
         setDone(true)
       })
       .catch((err) => {
@@ -167,8 +167,8 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
         <Button variant="soft" onClick={onBack} disabled={!done && !error}>
           &larr; Back
         </Button>
-        {done && summaryRef.current && (
-          <Button onClick={() => onNext(summaryRef.current!)}>
+        {done && summary && (
+          <Button onClick={() => onNext(summary)}>
             Next &rarr;
           </Button>
         )}

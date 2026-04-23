@@ -6,11 +6,12 @@ interface Props {
   summary: ImportSummary
   mode: AppMode
   exportFilePath?: string
+  hasProvisioningData?: boolean
   onStartOver: () => void
   onUpsertFile?: (filePath: string) => void
 }
 
-export default function SummaryStep({ summary, mode, exportFilePath, onStartOver, onUpsertFile }: Props): React.ReactElement {
+export default function SummaryStep({ summary, mode, exportFilePath, hasProvisioningData, onStartOver, onUpsertFile }: Props): React.ReactElement {
   const overallStatus = summary.aborted
     ? 'aborted'
     : summary.failed === 0
@@ -124,15 +125,27 @@ export default function SummaryStep({ summary, mode, exportFilePath, onStartOver
         </table>
       </Box>
 
-      <Flex gap="3">
+      <Flex gap="3" wrap="wrap">
         <Button variant="soft" onClick={() => window.api.openLogFile()}>
           Open Log File
         </Button>
+        {exportFilePath && (
+          <Button variant="soft" onClick={() => window.api.openInFinder(exportFilePath)}>
+            Show in Finder
+          </Button>
+        )}
         {summary.failedRecords.length > 0 && (
           <Button variant="soft" color="red" onClick={handleExportErrors}>
             Export Error Report
           </Button>
         )}
+        <Button
+          variant="soft"
+          disabled={!hasProvisioningData}
+          title={hasProvisioningData ? undefined : "Re-extract with 'Include state provisioning data' to enable manifest generation"}
+        >
+          Generate Manifest
+        </Button>
         {mode === 'extract-upsert' && exportFilePath && onUpsertFile && (
           <Button variant="soft" onClick={() => onUpsertFile(exportFilePath)}>
             Upsert this file again &rarr;

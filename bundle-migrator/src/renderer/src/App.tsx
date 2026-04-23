@@ -264,6 +264,7 @@ export default function App(): React.ReactElement {
               summary={importSummary}
               mode={mode}
               exportFilePath={bundleExport?.exportFilePath}
+              hasProvisioningData={!!bundleExport?.provisioningData}
               onStartOver={resetAll}
               onUpsertFile={switchToUpsertOnly}
             />

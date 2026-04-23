@@ -8,6 +8,7 @@ import type {
   BundleExport,
   BundleComparison,
   ImportSummary,
+  ExtractionOptions,
   ProgressEvent,
   AllCredentials
 } from '../../shared/types'
@@ -16,10 +17,11 @@ interface ElectronAPI {
   connectSource: (creds?: OrgCredentials) => Promise<OrgStatus>
   connectTarget: (creds?: OrgCredentials) => Promise<OrgStatus>
   searchBundles: (search: string, bundleType?: BundleSearchType) => Promise<BundleListItem[]>
-  extractBundle: (bundleId: string, outputDirectory?: string) => Promise<BundleExport>
+  extractBundle: (options: ExtractionOptions) => Promise<BundleExport>
   importBundle: (exportFilePath: string) => Promise<ImportSummary>
   openLogFile: () => Promise<void>
   openFile: (filePath: string) => Promise<void>
+  openInFinder: (filePath: string) => Promise<void>
   renameExportFile: (currentPath: string, newFileName: string) => Promise<string>
   selectDirectory: () => Promise<string | null>
   selectBundleFile: () => Promise<string | null>

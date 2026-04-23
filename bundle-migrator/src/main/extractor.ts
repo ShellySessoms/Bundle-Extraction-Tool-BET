@@ -7,11 +7,13 @@ import { homedir } from 'os'
 import type {
   SfRecord,
   BundleExport,
+  ExtractionOptions,
   ProgressEvent,
   ReferenceData,
   BackfillData
 } from '../shared/types'
 import { FIELD_REGISTRY, getRegistryFieldsForExtraction } from './fieldRegistry'
+import { extractProvisioningMetadata } from './provisioningExtractor'
 
 // ─── SOQL helpers ────────────────────────────────────────────────────────────
 
@@ -144,10 +146,10 @@ function logInfo(message: string): void {
 
 export async function extractBundle(
   conn: Connection,
-  bundleId: string,
-  emitProgress: (e: ProgressEvent) => void,
-  outputDirectory?: string
+  options: ExtractionOptions,
+  emitProgress: (e: ProgressEvent) => void
 ): Promise<BundleExport> {
+  const { bundleId, outputDirectory } = options
   const records: { [objectApiName: string]: SfRecord[] } = {}
   const referenceData: ReferenceData = {
     classificationNames: [],
@@ -742,6 +744,43 @@ export async function extractBundle(
     referenceData,
     records,
     backfillData
+  }
+
+  // ─── Provisioning metadata (optional) ────────────────────────────────────
+
+  if (options.includeProvisioningData) {
+    logInfo('Extracting provisioning metadata')
+    emitProgress({
+      stage: 'extract',
+      object: 'Provisioning Metadata',
+      status: 'success',
+      message: 'Extracting state provisioning data...'
+    })
+    try {
+      const provisioningData = await extractProvisioningMetadata(conn, bundleExport)
+      bundleExport.provisioningData = provisioningData
+      const totalItems = provisioningData.featureFlags.length +
+        provisioningData.featureProcesses.length +
+        provisioningData.customScheduleEntryFields.length +
+        provisioningData.customDebtFields.length
+      emitProgress({
+        stage: 'extract',
+        object: 'Provisioning Metadata',
+        count: totalItems,
+        status: 'success',
+        message: `${provisioningData.featureFlags.length} feature flags, ` +
+          `${provisioningData.featureProcesses.length} feature processes, ` +
+          `${provisioningData.customScheduleEntryFields.length + provisioningData.customDebtFields.length} custom fields`
+      })
+    } catch (err) {
+      log.error('Provisioning metadata extraction failed', err)
+      emitProgress({
+        stage: 'extract',
+        object: 'Provisioning Metadata',
+        status: 'error',
+        message: 'Provisioning data extraction failed — bundle data still saved'
+      })
+    }
   }
 
   writeFileSync(outPath, JSON.stringify(bundleExport, null, 2), 'utf-8')

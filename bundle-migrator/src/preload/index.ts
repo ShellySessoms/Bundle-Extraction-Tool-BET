@@ -7,6 +7,7 @@ import type {
   BundleExport,
   BundleComparison,
   ImportSummary,
+  ExtractionOptions,
   ProgressEvent,
   AllCredentials
 } from '../shared/types'
@@ -21,8 +22,8 @@ const api = {
   searchBundles: (search: string, bundleType?: BundleSearchType): Promise<BundleListItem[]> =>
     ipcRenderer.invoke('sf:searchBundles', search, bundleType ?? 'template'),
 
-  extractBundle: (bundleId: string, outputDirectory?: string): Promise<BundleExport> =>
-    ipcRenderer.invoke('sf:extractBundle', bundleId, outputDirectory),
+  extractBundle: (options: ExtractionOptions): Promise<BundleExport> =>
+    ipcRenderer.invoke('sf:extractBundle', options),
 
   importBundle: (exportFilePath: string): Promise<ImportSummary> =>
     ipcRenderer.invoke('sf:importBundle', exportFilePath),
@@ -30,6 +31,8 @@ const api = {
   openLogFile: (): Promise<void> => ipcRenderer.invoke('app:openLogFile'),
 
   openFile: (filePath: string): Promise<void> => ipcRenderer.invoke('app:openFile', filePath),
+
+  openInFinder: (filePath: string): Promise<void> => ipcRenderer.invoke('app:openInFinder', filePath),
 
   renameExportFile: (currentPath: string, newFileName: string): Promise<string> =>
     ipcRenderer.invoke('app:renameExportFile', currentPath, newFileName),

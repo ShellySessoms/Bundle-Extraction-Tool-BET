@@ -9,7 +9,7 @@ import { connectSource, connectTarget, updateSourceCredentials, updateTargetCred
 import { extractBundle } from './extractor'
 import { importBundle } from './importer'
 import { compareBundles, comparisonToMarkdown, comparisonToCsv } from './bundleComparator'
-import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials } from '../shared/types'
+import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials, ExtractionOptions } from '../shared/types'
 
 log.initialize()
 
@@ -213,9 +213,9 @@ ipcMain.handle(
 
 ipcMain.handle(
   'sf:extractBundle',
-  async (_event, bundleId: string, outputDirectory?: string): Promise<BundleExport> => {
+  async (_event, options: ExtractionOptions): Promise<BundleExport> => {
     try {
-      log.info('sf:extractBundle received', { bundleId, outputDirectory })
+      log.info('sf:extractBundle received', { bundleId: options.bundleId, outputDirectory: options.outputDirectory, includeProvisioningData: options.includeProvisioningData })
       const conn = await connectSource()
       const emitProgress = (e: ProgressEvent): void => {
         if (!mainWindow) {
@@ -224,7 +224,7 @@ ipcMain.handle(
         }
         mainWindow.webContents.send('progress', e)
       }
-      return await extractBundle(conn, bundleId, emitProgress, outputDirectory)
+      return await extractBundle(conn, options, emitProgress)
     } catch (err) {
       log.error('sf:extractBundle failed', err)
       throw new Error(err instanceof Error ? err.message : String(err))
@@ -278,6 +278,10 @@ ipcMain.handle('app:openFile', async (_event, filePath: string) => {
   } catch (err) {
     log.error('app:openFile failed', err)
   }
+})
+
+ipcMain.handle('app:openInFinder', async (_event, filePath: string) => {
+  shell.showItemInFolder(filePath)
 })
 
 ipcMain.handle(

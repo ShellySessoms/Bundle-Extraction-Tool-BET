@@ -265,19 +265,115 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
         )}
       </Box>
 
+      {/* Provisioning data */}
+      <Box p="4" style={{ border: '1px solid var(--gray-5)', borderRadius: 'var(--radius-3)' }}>
+        <Heading size="3" mb="2">State Provisioning Data</Heading>
+        {bundleExport.provisioningData ? (
+          <Flex direction="column" gap="2">
+            <Text size="2" color="green" weight="medium">Provisioning data included</Text>
+            <Text size="2">
+              <strong>Org:</strong> {bundleExport.provisioningData.orgType} — {bundleExport.provisioningData.orgId}
+            </Text>
+            {bundleExport.provisioningData.packageVersions.all.length > 0 ? (
+              <Box style={{ border: '1px solid var(--gray-4)', borderRadius: 'var(--radius-2)', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-4)' }}>Package</th>
+                      <th style={{ textAlign: 'left', padding: '6px 10px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-4)' }}>Namespace</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px', background: 'var(--gray-2)', borderBottom: '1px solid var(--gray-4)' }}>Version</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bundleExport.provisioningData.packageVersions.all.map((pkg) => (
+                      <tr key={pkg.namespace}>
+                        <td style={{ padding: '4px 10px', borderBottom: '1px solid var(--gray-3)' }}>{pkg.name}</td>
+                        <td style={{ padding: '4px 10px', borderBottom: '1px solid var(--gray-3)', fontFamily: 'monospace', fontSize: 12 }}>{pkg.namespace}</td>
+                        <td style={{ padding: '4px 10px', borderBottom: '1px solid var(--gray-3)', textAlign: 'right', fontFamily: 'monospace', fontSize: 12 }}>{pkg.versionString}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Box>
+            ) : (
+              <Text size="2" color="gray">Package versions unavailable — tooling API required</Text>
+            )}
+            <CollapsibleList
+              label="Feature Flags"
+              items={bundleExport.provisioningData.featureFlags.map(
+                (f) => `${f.developerName} — ${f.isActive ? 'Active' : 'Inactive'}${f.requiredForBundle ? ' (required)' : ''}`
+              )}
+              collapseThreshold={3}
+            />
+            <CollapsibleList
+              label="Feature Processes"
+              items={bundleExport.provisioningData.featureProcesses.map(
+                (f) => `${f.developerName} — ${f.featureName} (${f.isActive ? 'Active' : 'Inactive'})`
+              )}
+              collapseThreshold={3}
+            />
+            <CollapsibleList
+              label="Custom Fields"
+              items={[
+                ...bundleExport.provisioningData.customScheduleEntryFields.map(
+                  (f) => `${f.objectApiName}.${f.fieldApiName} (${f.dataType})`
+                ),
+                ...bundleExport.provisioningData.customDebtFields.map(
+                  (f) => `${f.objectApiName}.${f.fieldApiName} (${f.dataType})`
+                )
+              ]}
+              collapseThreshold={3}
+            />
+            <CollapsibleList
+              label="Required Permission Sets"
+              items={bundleExport.provisioningData.requiredPermissionSets.map(
+                (p) => `${p.name} — ${p.reason}`
+              )}
+              collapseThreshold={5}
+            />
+            {bundleExport.provisioningData.warnings.length > 0 && (
+              <CollapsibleList
+                label="Warnings"
+                items={bundleExport.provisioningData.warnings}
+                collapseThreshold={2}
+              />
+            )}
+          </Flex>
+        ) : (
+          <Text size="2" color="gray">
+            State provisioning data not included. Re-extract with &quot;Include state provisioning data&quot; checked to generate manifests.
+          </Text>
+        )}
+      </Box>
+
       {/* Export file path */}
       <Box p="3" style={{ background: 'var(--gray-2)', borderRadius: 'var(--radius-2)' }}>
         {!isRenaming ? (
-          <Flex align="center" gap="2">
-            <Text size="2" style={{ flex: 1 }}>
-              <strong>Export file:</strong>{' '}
-              <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                {bundleExport.exportFilePath}
-              </span>
-            </Text>
-            <Button variant="ghost" size="1" onClick={startRename} style={{ flexShrink: 0 }}>
-              Rename
-            </Button>
+          <Flex direction="column" gap="2">
+            <Flex align="center" gap="2">
+              <Text size="2" style={{ flex: 1 }}>
+                <strong>Export file:</strong>{' '}
+                <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                  {bundleExport.exportFilePath}
+                </span>
+              </Text>
+              <Button
+                variant="ghost"
+                size="1"
+                onClick={() => window.api.openInFinder(bundleExport.exportFilePath)}
+                style={{ flexShrink: 0 }}
+              >
+                Show in Finder
+              </Button>
+              <Button variant="ghost" size="1" onClick={startRename} style={{ flexShrink: 0 }}>
+                Rename
+              </Button>
+            </Flex>
+            {bundleExport.provisioningData && (
+              <Text size="1" color="blue">
+                Includes state provisioning data — use Generate Manifest on the Summary page to create separate provisioning files
+              </Text>
+            )}
           </Flex>
         ) : (
           <Flex direction="column" gap="2">

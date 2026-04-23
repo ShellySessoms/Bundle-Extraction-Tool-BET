@@ -60,6 +60,13 @@ export interface FailedRecord {
   record: SfRecord
 }
 
+/** Options for bundle extraction */
+export interface ExtractionOptions {
+  bundleId: string
+  outputDirectory?: string
+  includeProvisioningData: boolean
+}
+
 /** Full export payload for a single bundle */
 export interface BundleExport {
   bundleId: string
@@ -70,6 +77,75 @@ export interface BundleExport {
   referenceData: ReferenceData
   records: { [objectApiName: string]: SfRecord[] }
   backfillData: BackfillData
+  provisioningData?: ProvisioningMetadata
+}
+
+export type OrgType = 'scratch' | 'sandbox' | 'production' | 'developer' | 'unknown'
+
+export interface InstalledPackageVersion {
+  namespace: string
+  name: string
+  majorVersion: number
+  minorVersion: number
+  patchVersion?: number
+  versionString: string
+}
+
+export interface PackageVersions {
+  llcBi?: InstalledPackageVersion
+  nCred?: InstalledPackageVersion
+  nForce?: InstalledPackageVersion
+  nDesign?: InstalledPackageVersion
+  all: InstalledPackageVersion[]
+}
+
+export interface ProvisioningMetadata {
+  extractedAt: string
+  orgId: string
+  orgType: OrgType
+  packageVersions: PackageVersions
+  featureFlags: FeatureFlag[]
+  featureProcesses: FeatureProcess[]
+  customScheduleEntryFields: CustomFieldDef[]
+  customDebtFields: CustomFieldDef[]
+  requiredPermissionSets: PermissionSetRequirement[]
+  warnings: string[]
+}
+
+export interface FeatureFlag {
+  developerName: string
+  label: string
+  isActive: boolean
+  parent: string
+  version: string
+  lmoPermitted: boolean
+  developerPermitted: boolean
+  requiredForBundle: boolean
+  detectionReason?: string
+}
+
+export interface FeatureProcess {
+  developerName: string
+  label: string
+  featureName: string
+  apexClass: string
+  isActive: boolean
+  runOrder: number
+}
+
+export interface CustomFieldDef {
+  objectApiName: string
+  fieldApiName: string
+  label: string
+  dataType: string
+  isRequired: boolean
+  usedByScheduleNames: string[]
+}
+
+export interface PermissionSetRequirement {
+  name: string
+  reason: string
+  alwaysRequired: boolean
 }
 
 /** Progress event emitted during extract / import */
