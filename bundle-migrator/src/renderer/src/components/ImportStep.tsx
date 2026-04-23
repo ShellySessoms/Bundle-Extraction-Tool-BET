@@ -61,6 +61,16 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
 
   useEffect(() => {
     window.api.onProgress(handleProgress)
+    return () => {
+      window.api.removeAllListeners('progress')
+    }
+  }, [handleProgress])
+
+  const hasStarted = useRef(false)
+
+  useEffect(() => {
+    if (hasStarted.current) return
+    hasStarted.current = true
 
     window.api
       .importBundle(exportFilePath)
@@ -71,11 +81,7 @@ export default function ImportStep({ exportFilePath, onNext, onBack }: Props): R
       .catch((err) => {
         setError(err instanceof Error ? err.message : String(err))
       })
-
-    return () => {
-      window.api.removeAllListeners('progress')
-    }
-  }, [exportFilePath, handleProgress])
+  }, [exportFilePath])
 
   const phases = ['resolve', 'import', 'backfill', 'complete']
   const phaseIndex = phases.indexOf(currentPhase)

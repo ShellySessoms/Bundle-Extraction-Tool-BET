@@ -97,7 +97,6 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
     setRenameError('')
     try {
       const newPath = await window.api.renameExportFile(bundleExport.exportFilePath, trimmed)
-      bundleExport.exportFilePath = newPath
       onFileRenamed?.(newPath)
       setIsRenaming(false)
     } catch (err) {

@@ -73,6 +73,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Spread_Statement_Record_Total__c': {
     fields: [
+      'Name',
       'LLC_BI__Debit__c',
       'LLC_BI__Global_Analysis_Type__c',
       'LLC_BI__Group_Type__c',
@@ -98,6 +99,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Spread_Statement_Record__c': {
     fields: [
+      'Name',
       'LLC_BI__Formula__c',
       'LLC_BI__Debit__c',
       'LLC_BI__Display_Type__c',
@@ -129,6 +131,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Spread_Record_Classification__c': {
     fields: [
+      'Name',
       'LLC_BI__lookupKey__c',
       'LLC_BI__Classification__r.LLC_BI__lookupKey__c',
       'LLC_BI__Spread_Statement_Record__r.LLC_BI__lookupKey__c'
@@ -139,6 +142,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Spread_Record_Total_Classification__c': {
     fields: [
+      'Name',
       'LLC_BI__lookupKey__c',
       'LLC_BI__Classification__r.LLC_BI__lookupKey__c',
       'LLC_BI__Spread_Statement_Total_Group__r.LLC_BI__lookupKey__c'
@@ -167,6 +171,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Loan_Assumptions__c': {
     fields: [
+      'Name',
       'LLC_BI__lookupKey__c',
       'LLC_BI__Bundle__r.LLC_BI__lookupKey__c',
       'LLC_BI__Interest_Rate__c',
@@ -337,6 +342,7 @@ export const FIELD_REGISTRY: Record<string, FieldRegistryEntry> = {
 
   'LLC_BI__Debt_Schedule__c': {
     fields: [
+      'Name',
       'LLC_BI__lookupKey__c',
       'LLC_BI__Bundle__r.LLC_BI__lookupKey__c',
       'LLC_BI__Debt_Filter_Syntax__c',

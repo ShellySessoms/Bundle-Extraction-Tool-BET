@@ -1,5 +1,6 @@
 import type { Connection } from '@jsforce/jsforce-node'
 import type { Record as JsforceRecord } from '@jsforce/jsforce-node/lib/types'
+import type { Field } from '@jsforce/jsforce-node/lib/types/common'
 import log from 'electron-log/main'
 import { readFileSync } from 'fs'
 import { resolveReferences } from './referenceResolver'
@@ -14,29 +15,19 @@ import type {
 
 type UpdatePayload = { Id: string; [key: string]: unknown }
 
-const AUTO_NUMBER_OBJECTS = new Set([
-  'LLC_BI__Spread_Statement_Type__c',
-  'LLC_BI__Spread_Statement_Record__c',
-  'LLC_BI__Spread_Statement_Record_Total__c',
-  'LLC_BI__Spread_Record_Classification__c',
-  'LLC_BI__Spread_Record_Total_Classification__c',
-  'LLC_BI__Spread_Statement_Period__c',
-  'LLC_BI__Spread_Statement_Record_Value__c',
-  'LLC_BI__Spread_Statement_Period_Total__c',
-  'LLC_BI__Spread_Statement_Record_Group__c',
-  'LLC_BI__Spread_Statement_Row_Mapping__c',
-  'LLC_BI__Projection_Bundle_Junction__c',
-  'LLC_BI__Period_Consolidation__c',
-  'LLC_BI__Spread_Projections_Driver__c',
-  'LLC_BI__Schedule__c',
-  'LLC_BI__Schedule_Section__c',
-  'LLC_BI__Schedule_Entry__c',
-  'LLC_BI__Debt_Schedule__c',
-  'LLC_BI__Debt__c',
-  'LLC_BI__Loan_Assumptions__c',
-  'LLC_BI__Sensitivity_Analysis__c',
-  'LLC_BI__Tenant_Information__c'
-])
+const autoNumberCache = new Map<string, boolean>()
+
+async function isAutoNumberName(conn: Connection, objectApiName: string): Promise<boolean> {
+  const cached = autoNumberCache.get(objectApiName)
+  if (cached !== undefined) return cached
+
+  const desc = await conn.describe(objectApiName)
+  const nameField = desc.fields.find((f: Field) => f.name === 'Name')
+  const result = nameField?.autoNumber === true
+  autoNumberCache.set(objectApiName, result)
+  logInfo(`${objectApiName} Name field autoNumber=${result}`)
+  return result
+}
 
 const SYSTEM_FIELDS = [
   'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
@@ -371,11 +362,30 @@ function buildSourceIdToLookupKey(records: SfRecord[]): Map<string, string> {
   return map
 }
 
-function remapParentReferences(
+const targetClassificationCache = new Map<string, string | null>()
+
+async function resolveClassificationInTarget(
+  conn: Connection,
+  lookupKey: string
+): Promise<string | null> {
+  const cached = targetClassificationCache.get(lookupKey)
+  if (cached !== undefined) return cached
+
+  const rows = await queryAll<SfRecord>(
+    conn,
+    `SELECT Id FROM LLC_BI__Classification__c WHERE LLC_BI__lookupKey__c = '${lookupKey.replace(/'/g, "\\'")}' LIMIT 1`
+  )
+  const id = rows.length > 0 ? rows[0].Id : null
+  targetClassificationCache.set(lookupKey, id)
+  return id
+}
+
+async function remapParentReferences(
+  conn: Connection,
   objectApiName: string,
   records: SfRecord[],
   exportData: { [objectApiName: string]: SfRecord[] }
-): void {
+): Promise<void> {
   const refMap = FIELD_REFERENCE_MAP[objectApiName]
   if (!refMap) return
 
@@ -397,18 +407,43 @@ function remapParentReferences(
       if (lookupKey) {
         delete rec[sourceField]
         rec[relationship] = { LLC_BI__lookupKey__c: lookupKey }
+      } else if (parentObject === 'LLC_BI__Classification__c') {
+        const allClassRecords = exportData['LLC_BI__Classification__c'] ?? []
+        const matchByLookup = allClassRecords.find((r) => r.LLC_BI__lookupKey__c && r.Id === sourceId)
+        const lk = matchByLookup?.LLC_BI__lookupKey__c as string | undefined
+        if (lk) {
+          const targetId = await resolveClassificationInTarget(conn, lk)
+          if (targetId) {
+            delete rec[sourceField]
+            rec[relationship] = { LLC_BI__lookupKey__c: lk }
+          } else {
+            logWarn(`${objectApiName}: Classification ${sourceId} (lookupKey=${lk}) not found in target org — clearing field`)
+            delete rec[sourceField]
+          }
+        } else {
+          logWarn(`${objectApiName}: could not resolve Classification source Id ${sourceId} — not in export data, clearing field`)
+          delete rec[sourceField]
+        }
+      } else {
+        logWarn(`${objectApiName}: could not resolve ${sourceField} source Id ${sourceId} to ${parentObject} lookupKey — clearing field to prevent stale ID`)
+        delete rec[sourceField]
       }
     }
   }
 }
 
-function stripNonTransferableFields(objectApiName: string, records: SfRecord[]): void {
+async function stripNonTransferableFields(
+  conn: Connection,
+  objectApiName: string,
+  records: SfRecord[]
+): Promise<void> {
+  const stripName = await isAutoNumberName(conn, objectApiName)
   for (const rec of records) {
     const r = rec as Record<string, unknown>
     delete r.Id
     delete r.attributes
     delete r.OwnerId
-    if (AUTO_NUMBER_OBJECTS.has(objectApiName)) {
+    if (stripName) {
       delete r.Name
     }
     for (const sf of SYSTEM_FIELDS) {
@@ -417,14 +452,15 @@ function stripNonTransferableFields(objectApiName: string, records: SfRecord[]):
   }
 }
 
-function prepareRecords(
+async function prepareRecords(
+  conn: Connection,
   objectApiName: string,
   records: SfRecord[],
   exportData: { [objectApiName: string]: SfRecord[] }
-): SfRecord[] {
+): Promise<SfRecord[]> {
   const cloned = records.map((r) => ({ ...r }))
-  remapParentReferences(objectApiName, cloned, exportData)
-  stripNonTransferableFields(objectApiName, cloned)
+  await remapParentReferences(conn, objectApiName, cloned, exportData)
+  await stripNonTransferableFields(conn, objectApiName, cloned)
   return cloned
 }
 
@@ -447,13 +483,13 @@ export async function importBundle(
     failedRecords: []
   }
 
-  async function upsertObject(objectApiName: string, records: SfRecord[]): Promise<void> {
+  async function upsertObject(objectApiName: string, records: SfRecord[]): Promise<{ succeeded: number; failed: number }> {
     if (records.length === 0) {
       logInfo(`${objectApiName}: no records to upsert`)
-      return
+      return { succeeded: 0, failed: 0 }
     }
 
-    const prepared = prepareRecords(objectApiName, records, bundle.records)
+    const prepared = await prepareRecords(conn, objectApiName, records, bundle.records)
     const result = await upsertBatch(conn, objectApiName, prepared)
 
     summary.totalRecords += records.length
@@ -491,6 +527,8 @@ export async function importBundle(
         ? `${result.failed.length} records failed — dependent objects in later phases may also fail due to missing parent records`
         : undefined
     })
+
+    return { succeeded: result.succeeded, failed: result.failed.length }
   }
 
   // ─── Step 0: Resolve reference data & upsert Classifications ──────────
@@ -529,7 +567,20 @@ export async function importBundle(
       rec['LLC_BI__Collateral__r'] = { LLC_BI__lookupKey__c: collateralId }
     }
   }
-  await upsertObject('LLC_BI__Underwriting_Bundle__c', bundleRecords)
+  const bundleResult = await upsertObject('LLC_BI__Underwriting_Bundle__c', bundleRecords)
+
+  if (bundleResult.failed > 0) {
+    const reason = 'Bundle upsert failed — all dependent objects require the bundle to exist first'
+    logWarn(`ABORT: ${reason}`)
+    emitProgress({
+      stage: 'complete',
+      status: 'error',
+      message: `Bundle upsert failed (${bundleResult.failed} errors). Cannot proceed — all child objects depend on the bundle. Check that LLC_BI__lookupKey__c is unique and valid.`
+    })
+    summary.aborted = true
+    summary.abortReason = reason
+    return summary
+  }
 
   // ─── Step 2: Statement Types (first pass — no common sizing refs) ─────
 
@@ -539,15 +590,31 @@ export async function importBundle(
     rec.LLC_BI__Calc_Common_Sizing_Record__c = null
     rec.LLC_BI__Calc_Common_Sizing_Total_Group__c = null
   }
-  await upsertObject('LLC_BI__Spread_Statement_Type__c', stRecords)
+  const stResult = await upsertObject('LLC_BI__Spread_Statement_Type__c', stRecords)
+
+  if (stResult.failed > 0) {
+    const reason = 'Statement Types upsert failed — records, periods, and values all depend on statement types'
+    logWarn(`ABORT: ${reason}`)
+    emitProgress({
+      stage: 'complete',
+      status: 'error',
+      message: `Statement Types upsert failed (${stResult.failed} errors). Cannot proceed — all child objects depend on statement types existing first.`
+    })
+    summary.aborted = true
+    summary.abortReason = reason
+    return summary
+  }
 
   // ─── Step 3: Record Totals ────────────────────────────────────────────
 
   logInfo('Step 3 — Upserting Record Totals')
-  await upsertObject(
+  const rtResult = await upsertObject(
     'LLC_BI__Spread_Statement_Record_Total__c',
     bundle.records['LLC_BI__Spread_Statement_Record_Total__c'] ?? []
   )
+  if (rtResult.failed > 0) {
+    logWarn(`Record Totals had ${rtResult.failed} failures — downstream objects may fail`)
+  }
 
   // ─── Step 4: Records (first pass — no linked refs) ────────────────────
 
@@ -558,7 +625,10 @@ export async function importBundle(
     rec.LLC_BI__Linked_Spread_Statement_Total_Group__c = null
     rec.LLC_BI__Associated_Parent_Record__c = null
   }
-  await upsertObject('LLC_BI__Spread_Statement_Record__c', recRecords)
+  const recResult = await upsertObject('LLC_BI__Spread_Statement_Record__c', recRecords)
+  if (recResult.failed > 0) {
+    logWarn(`Records had ${recResult.failed} failures — downstream objects may fail`)
+  }
 
   // ─── Step 5: Records backfill (second pass — linked refs) ─────────────
 
@@ -762,7 +832,7 @@ export async function importBundle(
         }
       }
     }
-    const internalPrepared = prepareRecords('LLC_BI__Debt__c', internalDebtRecords, bundle.records)
+    const internalPrepared = await prepareRecords(conn, 'LLC_BI__Debt__c', internalDebtRecords, bundle.records)
     const internalResult = await upsertBatch(conn, 'LLC_BI__Debt__c', internalPrepared)
     summary.totalRecords += internalDebtRecords.length
     summary.succeeded += internalResult.succeeded
@@ -875,7 +945,7 @@ async function upsertScheduleSections(
     }
   }
 
-  stripNonTransferableFields('LLC_BI__Schedule_Section__c', cloned)
+  await stripNonTransferableFields(conn, 'LLC_BI__Schedule_Section__c', cloned)
   const result = await upsertBatch(conn, 'LLC_BI__Schedule_Section__c', cloned)
 
   summary.totalRecords += records.length

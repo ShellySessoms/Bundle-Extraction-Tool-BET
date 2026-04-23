@@ -20,6 +20,7 @@ interface ElectronAPI {
   importBundle: (exportFilePath: string) => Promise<ImportSummary>
   openLogFile: () => Promise<void>
   openFile: (filePath: string) => Promise<void>
+  renameExportFile: (currentPath: string, newFileName: string) => Promise<string>
   selectDirectory: () => Promise<string | null>
   selectBundleFile: () => Promise<string | null>
   readBundleFile: (filePath: string) => Promise<BundleExport>

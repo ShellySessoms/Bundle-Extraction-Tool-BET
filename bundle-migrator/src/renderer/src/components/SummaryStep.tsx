@@ -11,16 +11,19 @@ interface Props {
 }
 
 export default function SummaryStep({ summary, mode, exportFilePath, onStartOver, onUpsertFile }: Props): React.ReactElement {
-  const overallStatus = summary.failed === 0
-    ? 'success'
-    : summary.succeeded > 0
-      ? 'partial'
-      : 'failed'
+  const overallStatus = summary.aborted
+    ? 'aborted'
+    : summary.failed === 0
+      ? 'success'
+      : summary.succeeded > 0
+        ? 'partial'
+        : 'failed'
 
   const bannerStyle: Record<string, { bg: string; color: 'green' | 'yellow' | 'red'; label: string }> = {
     success: { bg: 'var(--green-3)', color: 'green', label: 'Upsert Complete' },
     partial: { bg: 'var(--yellow-3)', color: 'yellow', label: 'Partial Success' },
-    failed: { bg: 'var(--red-3)', color: 'red', label: 'Upsert Failed' }
+    failed: { bg: 'var(--red-3)', color: 'red', label: 'Upsert Failed' },
+    aborted: { bg: 'var(--red-3)', color: 'red', label: 'Import Aborted' }
   }
 
   const banner = bannerStyle[overallStatus]
@@ -48,6 +51,14 @@ export default function SummaryStep({ summary, mode, exportFilePath, onStartOver
 
       <Box p="4" style={{ background: banner.bg, borderRadius: 'var(--radius-2)' }}>
         <Text color={banner.color} size="4" weight="bold">{banner.label}</Text>
+        {summary.abortReason && (
+          <Box mt="2">
+            <Text color="red" size="2">{summary.abortReason}</Text>
+            <Box mt="1">
+              <Text color="red" size="2">Fix the failed phase and try the import again.</Text>
+            </Box>
+          </Box>
+        )}
       </Box>
 
       {/* Summary table */}

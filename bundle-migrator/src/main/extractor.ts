@@ -496,23 +496,51 @@ export async function extractBundle(
     recordIds
   )
 
-  // Record Classifications
+  // Build set of excluded Classification IDs (nCino Standard Tags)
+  const nCinoStdTags = await queryAll<SfRecord>(
+    conn,
+    `SELECT Id FROM LLC_BI__Classification__c WHERE LLC_BI__Category__c = 'nCino Standard Tags'`
+  )
+  const nCinoStdTagIds = new Set(nCinoStdTags.map((c) => c.Id as string))
+  logInfo(`nCino Standard Tags classifications: ${nCinoStdTagIds.size} IDs (will be excluded from junction records)`)
+
+  // Record Classifications — filter out junctions referencing excluded classifications
   const rcFields = await resolveFields(conn, 'LLC_BI__Spread_Record_Classification__c')
-  await extractChunked(
+  const allRecordClassifications = await extractChunked(
     'LLC_BI__Spread_Record_Classification__c',
     rcFields,
     'LLC_BI__Spread_Statement_Record__c',
     recordIds
   )
+  const filteredRC = allRecordClassifications.filter((r) => {
+    const classId = r.LLC_BI__Classification__c as string | undefined
+    return !classId || !nCinoStdTagIds.has(classId)
+  })
+  if (filteredRC.length < allRecordClassifications.length) {
+    const excluded = allRecordClassifications.length - filteredRC.length
+    logInfo(`LLC_BI__Spread_Record_Classification__c: filtered out ${excluded} records referencing nCino Standard Tags`)
+    records['LLC_BI__Spread_Record_Classification__c'] = filteredRC
+    emitProgress({ stage: 'extract', object: 'LLC_BI__Spread_Record_Classification__c', count: filteredRC.length, status: 'success', message: `${excluded} nCino Standard Tags junctions excluded` })
+  }
 
-  // Record Total Classifications
+  // Record Total Classifications — filter out junctions referencing excluded classifications
   const rtcFields = await resolveFields(conn, 'LLC_BI__Spread_Record_Total_Classification__c')
-  await extractChunked(
+  const allTotalClassifications = await extractChunked(
     'LLC_BI__Spread_Record_Total_Classification__c',
     rtcFields,
     'LLC_BI__Spread_Statement_Total_Group__c',
     totalIds
   )
+  const filteredRTC = allTotalClassifications.filter((r) => {
+    const classId = r.LLC_BI__Classification__c as string | undefined
+    return !classId || !nCinoStdTagIds.has(classId)
+  })
+  if (filteredRTC.length < allTotalClassifications.length) {
+    const excluded = allTotalClassifications.length - filteredRTC.length
+    logInfo(`LLC_BI__Spread_Record_Total_Classification__c: filtered out ${excluded} records referencing nCino Standard Tags`)
+    records['LLC_BI__Spread_Record_Total_Classification__c'] = filteredRTC
+    emitProgress({ stage: 'extract', object: 'LLC_BI__Spread_Record_Total_Classification__c', count: filteredRTC.length, status: 'success', message: `${excluded} nCino Standard Tags junctions excluded` })
+  }
 
   // Row Mappings
   const rmFields = await resolveFields(conn, 'LLC_BI__Spread_Statement_Row_Mapping__c')

@@ -210,4 +210,6 @@ export interface ImportSummary {
   failed: number
   byObject: { [objectApiName: string]: { created: number; updated: number; failed: number } }
   failedRecords: FailedRecord[]
+  aborted?: boolean
+  abortReason?: string
 }

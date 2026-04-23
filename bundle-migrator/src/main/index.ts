@@ -232,21 +232,34 @@ ipcMain.handle(
   }
 )
 
+let importInProgress = false
+
 ipcMain.handle(
   'sf:importBundle',
   async (_event, exportFilePath: string): Promise<ImportSummary> => {
+    if (importInProgress) {
+      log.warn('Import already in progress — ignoring duplicate call')
+      throw new Error('Import already in progress')
+    }
+    importInProgress = true
     try {
       const conn = await connectTarget()
       if (!conn) {
         throw new Error('Target org is not configured. Set TARGET_SF_USERNAME in .env to import.')
       }
       const emitProgress = (e: ProgressEvent): void => {
-        mainWindow?.webContents.send('progress', e)
+        if (!mainWindow || mainWindow.isDestroyed()) {
+          log.warn('Cannot send progress event — mainWindow unavailable')
+          return
+        }
+        mainWindow.webContents.send('progress', e)
       }
       return await importBundle(conn, exportFilePath, emitProgress)
     } catch (err) {
       log.error('sf:importBundle failed', err)
       throw new Error(err instanceof Error ? err.message : String(err))
+    } finally {
+      importInProgress = false
     }
   }
 )
