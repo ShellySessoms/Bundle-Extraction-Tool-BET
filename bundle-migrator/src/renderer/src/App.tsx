@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Container, Flex, Heading, Text } from '@radix-ui/themes'
+import { Box, Button, Container, Flex, Heading, Text } from '@radix-ui/themes'
 import ErrorBoundary from './components/ErrorBoundary'
 import OrgConnectStep from './components/OrgConnectStep'
 import ModeStep from './components/ModeStep'
@@ -10,10 +10,26 @@ import FileSelectStep from './components/FileSelectStep'
 import TargetConnectStep from './components/TargetConnectStep'
 import CompareFileSelectStep from './components/CompareFileSelectStep'
 import CompareResultsStep from './components/CompareResultsStep'
+import PDIInsightStep from './components/PDIInsightStep'
+import PDIResultsStep from './components/PDIResultsStep'
 import ImportStep from './components/ImportStep'
 import SummaryStep from './components/SummaryStep'
 import { EMPTY_CREDS } from './components/OrgConnectStep'
-import type { AppMode, OrgStatus, OrgCredentials, AllCredentials, BundleListItem, BundleExport, ImportSummary } from '../../shared/types'
+import type { AppMode, OrgStatus, OrgCredentials, AllCredentials, BundleListItem, BundleExport, ImportSummary, PDIAnalysisResult, JiraTicketContext, BedrockCredentials } from '../../shared/types'
+
+function getBedrockErrorMessage(err: string): string {
+  if (err.includes('BEDROCK_NOT_CONFIGURED'))
+    return 'AI features need setup. Add your Bedrock inference profile ARN in the credentials screen. Request a profile at bedrock-self-service.ncino.ai'
+  if (err.includes('BEDROCK_ACCESS_DENIED'))
+    return 'AWS permission error. Run genailogin in your terminal to refresh your session, then try again.'
+  if (err.includes('BEDROCK_TOKEN_EXPIRED'))
+    return 'AWS session expired. Run genailogin in your terminal to refresh your credentials and try again.'
+  if (err.includes('BEDROCK_PROFILE_NOT_FOUND'))
+    return 'Inference profile not found. Verify your ARN in the credentials screen at bedrock-self-service.ncino.ai'
+  if (err.includes('BEDROCK_VALIDATION_ERROR'))
+    return 'Invalid Bedrock configuration. Check your inference profile ARN in the credentials screen.'
+  return err
+}
 
 type Step =
   | 'connect'
@@ -27,6 +43,8 @@ type Step =
   | 'summary'
   | 'compareFileSelect'
   | 'compareResults'
+  | 'pdiInsight'
+  | 'pdiResults'
 
 const STEP_LABELS: Record<Step, string> = {
   connect: 'Connect',
@@ -39,7 +57,9 @@ const STEP_LABELS: Record<Step, string> = {
   import: 'Upsert',
   summary: 'Summary',
   compareFileSelect: 'Select Files',
-  compareResults: 'Results'
+  compareResults: 'Results',
+  pdiInsight: 'Describe PDI',
+  pdiResults: 'Analysis'
 }
 
 function stepsForMode(mode: AppMode | null): Step[] {
@@ -52,6 +72,8 @@ function stepsForMode(mode: AppMode | null): Step[] {
       return ['mode', 'connect', 'fileSelect', 'review', 'import', 'summary']
     case 'compare':
       return ['mode', 'compareFileSelect', 'compareResults']
+    case 'pdi-insight':
+      return ['mode', 'pdiInsight', 'pdiResults']
     default:
       return ['mode']
   }
@@ -72,14 +94,23 @@ export default function App(): React.ReactElement {
   const [comparePathA, setComparePathA] = useState('')
   const [comparePathB, setComparePathB] = useState('')
   const [compareResultLabel, setCompareResultLabel] = useState('')
+  const [pdiResult, setPdiResult] = useState<PDIAnalysisResult | null>(null)
+  const [pdiDescription, setPdiDescription] = useState('')
+  const [pdiJiraTicket, setPdiJiraTicket] = useState<JiraTicketContext | null>(null)
+  const [pdiAnalyzing, setPdiAnalyzing] = useState(false)
+  const [pdiError, setPdiError] = useState('')
+  const [bedrockCreds, setBedrockCreds] = useState<BedrockCredentials | undefined>(undefined)
 
   useEffect(() => {
     window.api.getCredentials().then((creds) => {
       setSourceCreds(creds.source)
       setTargetCreds(creds.target)
+      setBedrockCreds(creds.bedrock)
       setCredsLoaded(true)
     })
   }, [])
+
+  const hasAIEnabled = Boolean(bedrockCreds?.inferenceProfileArn)
 
   const activeSteps = stepsForMode(mode)
   const currentIndex = activeSteps.indexOf(step)
@@ -93,12 +124,17 @@ export default function App(): React.ReactElement {
     setComparePathA('')
     setComparePathB('')
     setCompareResultLabel('')
+    setPdiResult(null)
+    setPdiDescription('')
+    setPdiJiraTicket(null)
+    setPdiError('')
     setStep('mode')
   }
 
   const handleCredsSaved = (creds: AllCredentials): void => {
     setSourceCreds(creds.source)
     setTargetCreds(creds.target)
+    setBedrockCreds(creds.bedrock)
   }
 
   const switchToUpsertOnly = (filePath: string): void => {
@@ -146,10 +182,13 @@ export default function App(): React.ReactElement {
         <ErrorBoundary>
           {step === 'mode' && (
             <ModeStep
+              hasAIEnabled={hasAIEnabled}
               onNext={(selectedMode) => {
                 setMode(selectedMode)
                 if (selectedMode === 'compare') {
                   setStep('compareFileSelect')
+                } else if (selectedMode === 'pdi-insight') {
+                  setStep('pdiInsight')
                 } else {
                   setStep('connect')
                 }
@@ -264,6 +303,7 @@ export default function App(): React.ReactElement {
               summary={importSummary}
               mode={mode}
               exportFilePath={bundleExport?.exportFilePath}
+              bundleExport={bundleExport ?? undefined}
               hasProvisioningData={!!bundleExport?.provisioningData}
               onStartOver={resetAll}
               onUpsertFile={switchToUpsertOnly}
@@ -291,6 +331,78 @@ export default function App(): React.ReactElement {
                 setCompareResultLabel(identical ? 'Results (Identical)' : `Results (${diffCount} diff${diffCount !== 1 ? 's' : ''})`)
               }}
             />
+          )}
+
+          {step === 'pdiInsight' && (
+            <PDIInsightStep
+              onAnalyze={async (bundle, description, affectedArea, errorMsg, jiraTicket) => {
+                setPdiDescription(description)
+                setPdiJiraTicket(jiraTicket)
+                setPdiAnalyzing(true)
+                setPdiError('')
+                setPdiResult(null)
+                setStep('pdiResults')
+                try {
+                  const result = await window.api.analyzePDI({
+                    bundle,
+                    pdiDescription: description,
+                    affectedArea,
+                    errorMessage: errorMsg,
+                    jiraTicket: jiraTicket ?? undefined
+                  })
+                  setPdiResult(result)
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err)
+                  setPdiError(getBedrockErrorMessage(msg))
+                } finally {
+                  setPdiAnalyzing(false)
+                }
+              }}
+              onBack={() => setStep('mode')}
+            />
+          )}
+
+          {step === 'pdiResults' && (
+            pdiAnalyzing ? (
+              <Flex direction="column" gap="4">
+                <Heading size="5">PDI Analysis</Heading>
+                <Box p="4" style={{
+                  border: '1px solid var(--purple-4)',
+                  borderRadius: 'var(--radius-3)',
+                  background: 'var(--purple-1)'
+                }}>
+                  <Text size="2" color="purple">Analyzing template against PDI description...</Text>
+                </Box>
+              </Flex>
+            ) : pdiError ? (
+              <Flex direction="column" gap="4">
+                <Heading size="5">PDI Analysis</Heading>
+                <Box p="3" style={{
+                  border: '1px solid var(--red-6)',
+                  borderRadius: 'var(--radius-2)',
+                  background: 'var(--red-2)'
+                }}>
+                  <Text size="2" color="red">Analysis failed: {pdiError}</Text>
+                </Box>
+                <Flex gap="3">
+                  <Button variant="soft" onClick={() => setStep('pdiInsight')}>&larr; Back</Button>
+                  <Button onClick={resetAll}>Start Over</Button>
+                </Flex>
+              </Flex>
+            ) : pdiResult ? (
+              <PDIResultsStep
+                result={pdiResult}
+                pdiDescription={pdiDescription}
+                jiraTicket={pdiJiraTicket}
+                onAnalyzeAnother={() => {
+                  setPdiResult(null)
+                  setPdiJiraTicket(null)
+                  setPdiError('')
+                  setStep('pdiInsight')
+                }}
+                onStartOver={resetAll}
+              />
+            ) : null
           )}
         </ErrorBoundary>
       </Flex>

@@ -69,8 +69,19 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
   const [renameError, setRenameError] = useState('')
   const [renaming, setRenaming] = useState(false)
 
+  const isWindows = navigator.userAgent.includes('Windows')
+  const finderLabel = isWindows ? 'Show in Explorer' : 'Show in Finder'
+
   const currentFileName = bundleExport.exportFilePath.split('/').pop() ?? ''
   const fileNameWithoutExt = currentFileName.replace(/\.json$/, '')
+  const folderPath = bundleExport.exportFilePath.substring(0, bundleExport.exportFilePath.lastIndexOf('/'))
+
+  const [copied, setCopied] = useState(false)
+  const copyPath = (): void => {
+    navigator.clipboard.writeText(bundleExport.exportFilePath)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   const startRename = (): void => {
     setRenameValue(fileNameWithoutExt)
@@ -351,19 +362,40 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
         {!isRenaming ? (
           <Flex direction="column" gap="2">
             <Flex align="center" gap="2">
-              <Text size="2" style={{ flex: 1 }}>
+              <Text size="2" style={{ flex: 1, minWidth: 0 }}>
                 <strong>Export file:</strong>{' '}
-                <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                <span style={{
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: 'var(--gray-11)',
+                  display: 'inline-block',
+                  maxWidth: 500,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  verticalAlign: 'middle'
+                }}>
                   {bundleExport.exportFilePath}
                 </span>
               </Text>
               <Button
                 variant="ghost"
                 size="1"
-                onClick={() => window.api.openInFinder(bundleExport.exportFilePath)}
+                onClick={() => window.api.showInFinder(bundleExport.exportFilePath)}
                 style={{ flexShrink: 0 }}
               >
-                Show in Finder
+                {finderLabel}
+              </Button>
+              <Button
+                variant="ghost"
+                size="1"
+                onClick={() => window.api.openFolder(folderPath)}
+                style={{ flexShrink: 0 }}
+              >
+                Open folder
+              </Button>
+              <Button variant="ghost" size="1" onClick={copyPath} style={{ flexShrink: 0 }}>
+                {copied ? 'Copied!' : 'Copy path'}
               </Button>
               <Button variant="ghost" size="1" onClick={startRename} style={{ flexShrink: 0 }}>
                 Rename
@@ -430,9 +462,15 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
           <>
             <Button
               variant="soft"
-              onClick={() => window.api.openFile(bundleExport.exportFilePath)}
+              onClick={() => window.api.showInFinder(bundleExport.exportFilePath)}
             >
-              Open File
+              {finderLabel}
+            </Button>
+            <Button
+              variant="soft"
+              onClick={() => window.api.openFolder(folderPath)}
+            >
+              Open folder
             </Button>
             <Button onClick={onStartOver}>Start Over</Button>
           </>

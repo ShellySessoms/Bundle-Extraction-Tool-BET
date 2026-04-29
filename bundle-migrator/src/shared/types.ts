@@ -173,14 +173,62 @@ export interface OrgCredentials {
   instanceUrl?: string
 }
 
+/** Jira API credentials for ticket integration */
+export interface JiraCredentials {
+  email: string
+  apiToken: string
+}
+
+/** AWS Bedrock credentials for AI features */
+export interface BedrockCredentials {
+  inferenceProfileArn: string
+  awsRegion: string
+  awsAccessKeyId?: string
+  awsSecretAccessKey?: string
+  awsSessionToken?: string
+}
+
+/** Context fetched from a Jira ticket */
+export interface JiraTicketContext {
+  key: string
+  url: string
+  summary: string
+  description: string
+  status: string
+  priority: string
+  labels: string[]
+  components: string[]
+  comments: string[]
+  fetchedAt: string
+}
+
 /** All credentials for both orgs */
 export interface AllCredentials {
   source: OrgCredentials
   target: OrgCredentials
+  jira?: JiraCredentials
+  bedrock?: BedrockCredentials
 }
 
 /** App workflow mode */
-export type AppMode = 'extract-only' | 'extract-upsert' | 'upsert-only' | 'compare'
+export type AppMode = 'extract-only' | 'extract-upsert' | 'upsert-only' | 'compare' | 'pdi-insight'
+
+/** PDI Analysis request sent to the main process */
+export interface PDIAnalysisRequest {
+  bundle: BundleExport
+  pdiDescription: string
+  affectedArea?: string
+  errorMessage?: string
+  jiraTicket?: JiraTicketContext
+}
+
+/** PDI Analysis result returned from the main process */
+export interface PDIAnalysisResult {
+  analysis: string
+  verdict?: 'likely' | 'possibly' | 'unlikely'
+  templateName: string
+  analyzedAt: string
+}
 
 /** Result of comparing two bundle exports */
 export interface BundleComparison {
@@ -277,6 +325,38 @@ export interface ManifestConfig {
     insertOrder: number
     recordCount: number
   }[]
+}
+
+export interface ManifestFile {
+  filename: string
+  relativePath: string
+  type: string
+  description: string
+  alwaysRequired: boolean
+  skipIfExists: boolean
+  generatedFrom: 'json' | 'org-query' | 'derived' | 'static'
+  incomplete: boolean
+  itemCount?: number
+}
+
+export interface ManifestSummary {
+  bundleName: string
+  generatedAt: string
+  mode: 'full' | 'offline'
+  totalFiles: number
+  requiredSteps: number
+  optionalSteps: number
+  incompleteFiles: number
+  featuresDetected: string[]
+  warnings: string[]
+}
+
+export interface ManifestPackage {
+  manifestDir: string
+  bundleName: string
+  mode: 'full' | 'offline'
+  files: ManifestFile[]
+  summary: ManifestSummary
 }
 
 /** Summary returned after a bundle import completes */

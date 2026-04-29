@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Box, Flex, Heading, Text, Button, Badge, TextField, IconButton } from '@radix-ui/themes'
-import type { AppMode, OrgStatus, OrgCredentials, AllCredentials } from '../../../shared/types'
+import type { AppMode, OrgStatus, OrgCredentials, AllCredentials, BedrockCredentials } from '../../../shared/types'
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error'
 type AuthMethod = 'credentials' | 'session'
@@ -225,11 +225,55 @@ export default function OrgConnectStep({
   const [sourceCreds, setSourceCreds] = useState<OrgCredentials>({ ...initialSourceCreds })
   const [targetCreds, setTargetCreds] = useState<OrgCredentials>({ ...initialTargetCreds })
   const [saving, setSaving] = useState(false)
+  const [jiraEmail, setJiraEmail] = useState('')
+  const [jiraApiToken, setJiraApiToken] = useState('')
+  const [jiraLoaded, setJiraLoaded] = useState(false)
+  const [bedrockArn, setBedrockArn] = useState('')
+  const [bedrockRegion, setBedrockRegion] = useState('us-east-1')
+  const [bedrockAccessKeyId, setBedrockAccessKeyId] = useState('')
+  const [bedrockSecretKey, setBedrockSecretKey] = useState('')
+  const [bedrockSessionToken, setBedrockSessionToken] = useState('')
+
+  React.useEffect(() => {
+    if (!jiraLoaded) {
+      window.api.getCredentials().then((creds) => {
+        if (creds.jira) {
+          setJiraEmail(creds.jira.email)
+          setJiraApiToken(creds.jira.apiToken)
+        }
+        if (creds.bedrock) {
+          setBedrockArn(creds.bedrock.inferenceProfileArn ?? '')
+          setBedrockRegion(creds.bedrock.awsRegion ?? 'us-east-1')
+          setBedrockAccessKeyId(creds.bedrock.awsAccessKeyId ?? '')
+          setBedrockSecretKey(creds.bedrock.awsSecretAccessKey ?? '')
+          setBedrockSessionToken(creds.bedrock.awsSessionToken ?? '')
+        }
+        setJiraLoaded(true)
+      })
+    }
+  }, [jiraLoaded])
 
   const saveCredentials = async (): Promise<void> => {
     setSaving(true)
     try {
-      const all = { source: sourceCreds, target: targetCreds }
+      const all: AllCredentials = {
+        source: sourceCreds,
+        target: targetCreds,
+        ...(jiraEmail || jiraApiToken
+          ? { jira: { email: jiraEmail, apiToken: jiraApiToken } }
+          : {}),
+        ...(bedrockArn
+          ? {
+              bedrock: {
+                inferenceProfileArn: bedrockArn,
+                awsRegion: bedrockRegion || 'us-east-1',
+                awsAccessKeyId: bedrockAccessKeyId || undefined,
+                awsSecretAccessKey: bedrockSecretKey || undefined,
+                awsSessionToken: bedrockSessionToken || undefined
+              }
+            }
+          : {})
+      }
       await window.api.saveCredentials(all)
       onCredsSaved(all)
     } finally {
@@ -329,6 +373,117 @@ export default function OrgConnectStep({
           />
         )}
       </Flex>
+
+      <Box p="4" style={{ border: '1px solid var(--gray-4)', borderRadius: 'var(--radius-2)' }}>
+        <Flex direction="column" gap="2">
+          <Heading size="3">Jira Integration (Optional)</Heading>
+          <Text size="2" color="gray">
+            Enables fetching Jira ticket details in PDI Insight for richer AI analysis.
+          </Text>
+          <CredentialField
+            label="Atlassian Email"
+            value={jiraEmail}
+            onChange={setJiraEmail}
+          />
+          <CredentialField
+            label="Atlassian API Token"
+            value={jiraApiToken}
+            onChange={setJiraApiToken}
+            isSecret
+          />
+          <Text size="1" color="gray">
+            Generate at: id.atlassian.com/manage-profile/security/api-tokens
+          </Text>
+          {jiraEmail && jiraApiToken && (
+            <Text size="1" color="green">Jira integration configured</Text>
+          )}
+        </Flex>
+      </Box>
+
+      <Box p="4" style={{ border: '1px solid var(--gray-4)', borderRadius: 'var(--radius-2)' }}>
+        <Flex direction="column" gap="3">
+          <Heading size="3">AI Features (AWS Bedrock)</Heading>
+          <Text size="2" color="gray">
+            Required for AI Analysis on bundle comparisons and PDI Insight.
+            Request an inference profile at bedrock-self-service.ncino.ai
+            then run genailogin in your terminal to authenticate.
+          </Text>
+
+          <CredentialField
+            label="Inference Profile ARN *"
+            value={bedrockArn}
+            onChange={setBedrockArn}
+          />
+          <Text size="1" color="gray">
+            Required. Get yours at bedrock-self-service.ncino.ai
+          </Text>
+
+          <CredentialField
+            label="AWS Region"
+            value={bedrockRegion}
+            onChange={setBedrockRegion}
+          />
+          <Text size="1" color="gray">Default: us-east-1</Text>
+
+          <Box>
+            <details>
+              <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+                Advanced: Explicit AWS Credentials (optional)
+              </summary>
+              <Text size="1" color="gray" style={{ display: 'block', marginTop: 8, marginBottom: 8 }}>
+                Leave blank to use your AWS SSO session (recommended).
+                Only needed if you cannot use genailogin.
+              </Text>
+              <Flex direction="column" gap="2">
+                <CredentialField
+                  label="AWS Access Key ID"
+                  value={bedrockAccessKeyId}
+                  onChange={setBedrockAccessKeyId}
+                />
+                <CredentialField
+                  label="AWS Secret Access Key"
+                  value={bedrockSecretKey}
+                  onChange={setBedrockSecretKey}
+                  isSecret
+                />
+                <CredentialField
+                  label="AWS Session Token"
+                  value={bedrockSessionToken}
+                  onChange={setBedrockSessionToken}
+                  isSecret
+                />
+              </Flex>
+            </details>
+          </Box>
+
+          {bedrockArn && (
+            <Flex align="center" gap="2">
+              <Text size="1" color="green">
+                Inference profile configured - AI features enabled
+              </Text>
+              <Button
+                variant="ghost"
+                size="1"
+                color="gray"
+                onClick={() => {
+                  setBedrockArn('')
+                  setBedrockRegion('us-east-1')
+                  setBedrockAccessKeyId('')
+                  setBedrockSecretKey('')
+                  setBedrockSessionToken('')
+                }}
+              >
+                Clear
+              </Button>
+            </Flex>
+          )}
+          {!bedrockArn && (
+            <Text size="1" color="gray">
+              AI features disabled until inference profile ARN is added.
+            </Text>
+          )}
+        </Flex>
+      </Box>
 
       <Flex gap="3">
         <Button variant="soft" onClick={onBack}>&larr; Back</Button>

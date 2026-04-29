@@ -5,11 +5,14 @@ import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
 import log from 'electron-log/main'
 import { mkdirSync } from 'fs'
 import type { Connection } from '@jsforce/jsforce-node'
-import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, getAllCredentials, credentialsFilePath, resolveIdentity } from './sfConnection'
+import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, updateJiraCredentials, updateBedrockCredentials, getJiraCredentials, getAllCredentials, credentialsFilePath, resolveIdentity } from './sfConnection'
 import { extractBundle } from './extractor'
 import { importBundle } from './importer'
 import { compareBundles, comparisonToMarkdown, comparisonToCsv } from './bundleComparator'
-import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials, ExtractionOptions } from '../shared/types'
+import { generateManifest } from './manifestGenerator'
+import { buildComparisonSummaryForAI, buildTemplateContextForPDI } from './aiHelpers'
+import { invokeBedrockModel } from './bedrockClient'
+import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials, ExtractionOptions, ManifestPackage, PDIAnalysisRequest, PDIAnalysisResult, JiraTicketContext } from '../shared/types'
 
 log.initialize()
 
@@ -284,6 +287,26 @@ ipcMain.handle('app:openInFinder', async (_event, filePath: string) => {
   shell.showItemInFolder(filePath)
 })
 
+ipcMain.handle('app:showInFinder', async (_event, filePath: string) => {
+  try {
+    shell.showItemInFolder(filePath)
+    log.info('Opened in Finder:', filePath)
+  } catch (err) {
+    log.error('Failed to open in Finder:', err)
+    throw new Error(err instanceof Error ? err.message : String(err))
+  }
+})
+
+ipcMain.handle('app:openFolder', async (_event, folderPath: string) => {
+  try {
+    await shell.openPath(folderPath)
+    log.info('Opened folder:', folderPath)
+  } catch (err) {
+    log.error('Failed to open folder:', err)
+    throw new Error(err instanceof Error ? err.message : String(err))
+  }
+})
+
 ipcMain.handle(
   'app:renameExportFile',
   async (_event, currentPath: string, newFileName: string): Promise<string> => {
@@ -424,11 +447,323 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle(
+  'app:generateManifest',
+  async (_event, bundle: BundleExport, outputDir: string): Promise<ManifestPackage> => {
+    try {
+      log.info('Generating manifest', { bundleName: bundle.bundleName, outputDir })
+      const result = generateManifest(bundle, outputDir)
+      log.info('Manifest generated', { manifestDir: result.manifestDir })
+      return result
+    } catch (err) {
+      log.error('Manifest generation failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
+
 ipcMain.handle('app:saveCredentials', async (_event, creds: AllCredentials): Promise<void> => {
   updateSourceCredentials(creds.source)
   updateTargetCredentials(creds.target)
+  if (creds.jira) updateJiraCredentials(creds.jira)
+  if (creds.bedrock) updateBedrockCredentials(creds.bedrock)
   saveCredentialsFile()
 })
+
+ipcMain.handle(
+  'app:analyzeComparison',
+  async (_event, comparison: BundleComparison): Promise<string> => {
+    try {
+      const creds = getAllCredentials()
+      const bedrockCreds = creds?.bedrock
+
+      if (!bedrockCreds?.inferenceProfileArn) {
+        throw new Error(
+          'BEDROCK_NOT_CONFIGURED: No Bedrock inference profile ' +
+          'configured. Add your ARN in the credentials screen.'
+        )
+      }
+
+      const summary = buildComparisonSummaryForAI(comparison)
+
+      const systemPrompt = `You are an expert on nCino's Spreads and Credit Analysis product (LLC_BI managed package). You analyze differences between underwriting bundle templates and provide clear, actionable insights for financial institution administrators and QA engineers.
+
+When analyzing template differences:
+- Focus on FUNCTIONAL impact for end users (credit analysts)
+- Explain what differences mean in plain business terms
+- Identify which differences are likely intentional customizations vs potential configuration issues or gaps
+- Flag anything that could cause compatibility problems
+- Avoid Salesforce API names where possible — use human-readable labels like "Income Statement" not "LLC_BI__Spread_Statement_Type__c"
+- Be concise and prioritize the most important findings
+- Use bullet points for clarity`
+
+      const userMessage = `Analyze the differences between these two nCino underwriting bundle templates and provide insights:
+
+Bundle A: "${comparison.bundleAName}"
+Bundle B: "${comparison.bundleBName}"
+
+${summary}
+
+Please provide:
+1. A 2-3 sentence executive summary of the key differences
+2. The most significant functional differences and their business impact
+3. Any potential issues or configuration concerns you notice
+4. A recommendation for which template is better suited for which use case`
+
+      return await invokeBedrockModel(bedrockCreds, systemPrompt, userMessage, 1500)
+    } catch (err) {
+      log.error('AI comparison analysis failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
+
+ipcMain.handle(
+  'app:fetchJiraTicket',
+  async (_event, jiraUrl: string): Promise<JiraTicketContext> => {
+    try {
+      const keyMatch = jiraUrl.match(/([A-Z]+-\d+)/)
+      if (!keyMatch) {
+        throw new Error('Could not extract Jira ticket key from URL. Expected format: COMM-12345')
+      }
+      const ticketKey = keyMatch[1]
+
+      const jiraCreds = getJiraCredentials()
+      if (!jiraCreds?.email || !jiraCreds?.apiToken) {
+        throw new Error(
+          'JIRA_NOT_CONFIGURED: No Jira credentials found. ' +
+          'Add your Jira email and API token in the credentials screen.'
+        )
+      }
+
+      const jiraBaseUrl = 'https://ncinodev.atlassian.net'
+      const authHeader =
+        'Basic ' + Buffer.from(`${jiraCreds.email}:${jiraCreds.apiToken}`).toString('base64')
+
+      const issueResponse = await fetch(
+        `${jiraBaseUrl}/rest/api/3/issue/${ticketKey}?fields=summary,description,status,priority,labels,components,comment`,
+        {
+          headers: {
+            Authorization: authHeader,
+            Accept: 'application/json'
+          }
+        }
+      )
+
+      if (!issueResponse.ok) {
+        if (issueResponse.status === 401) {
+          throw new Error(
+            'JIRA_AUTH_FAILED: Invalid Jira credentials. Check your email and API token.'
+          )
+        }
+        if (issueResponse.status === 404) {
+          throw new Error(
+            `JIRA_NOT_FOUND: Ticket ${ticketKey} not found or you don't have access.`
+          )
+        }
+        throw new Error(`Jira API error ${issueResponse.status}`)
+      }
+
+      const issue = (await issueResponse.json()) as Record<string, unknown>
+      const fields = issue.fields as Record<string, unknown>
+
+      const extractText = (adfNode: unknown): string => {
+        if (!adfNode) return ''
+        if (typeof adfNode === 'string') return adfNode
+        const node = adfNode as Record<string, unknown>
+        if (node.type === 'text') return (node.text as string) || ''
+        if (Array.isArray(node.content)) {
+          return (node.content as unknown[]).map(extractText).join(' ')
+        }
+        return ''
+      }
+
+      const description = extractText(fields.description).substring(0, 2000).trim()
+
+      const commentField = fields.comment as Record<string, unknown> | undefined
+      const commentsList = (commentField?.comments ?? []) as Record<string, unknown>[]
+      const comments = commentsList.slice(-3).map((c) => {
+        const author = (c.author as Record<string, unknown>)?.displayName ?? 'Unknown'
+        const body = extractText(c.body).substring(0, 500)
+        return `${author}: ${body}`
+      })
+
+      const statusObj = fields.status as Record<string, unknown> | undefined
+      const priorityObj = fields.priority as Record<string, unknown> | undefined
+      const componentsArr = (fields.components ?? []) as Record<string, unknown>[]
+
+      log.info('Fetched Jira ticket', { key: ticketKey, summary: fields.summary })
+
+      return {
+        key: ticketKey,
+        url: jiraUrl,
+        summary: (fields.summary as string) ?? '',
+        description,
+        status: (statusObj?.name as string) ?? 'Unknown',
+        priority: (priorityObj?.name as string) ?? 'Unknown',
+        labels: (fields.labels ?? []) as string[],
+        components: componentsArr.map((c) => c.name as string),
+        comments,
+        fetchedAt: new Date().toISOString()
+      }
+    } catch (err) {
+      log.error('Jira ticket fetch failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
+
+ipcMain.handle(
+  'app:analyzePDI',
+  async (_event, request: PDIAnalysisRequest): Promise<PDIAnalysisResult> => {
+    try {
+      const creds = getAllCredentials()
+      const bedrockCreds = creds?.bedrock
+
+      if (!bedrockCreds?.inferenceProfileArn) {
+        throw new Error(
+          'BEDROCK_NOT_CONFIGURED: No Bedrock inference profile configured.'
+        )
+      }
+
+      const templateContext = buildTemplateContextForPDI(
+        request.bundle,
+        request.affectedArea
+      )
+
+      const systemPrompt = `You are an expert on nCino's Spreads and Credit Analysis product (LLC_BI managed package). You help developers and QA engineers diagnose whether reported issues (PDIs) are related to template configuration problems.
+
+You have deep knowledge of:
+- LLC_BI__Spread_Statement_Record__c (rows) and their Formula__c fields
+- LLC_BI__Spread_Statement_Record_Total__c (total groups) and how they aggregate rows
+- The two-pass record insertion pattern and linked record references
+- LLC_BI__Linked_Spread_Statement_Record__c and how cross-statement references work
+- LLC_BI__Calc_Common_Sizing_Record__c and common sizing configuration
+- Debt Schedule configuration and its relationship to spread periods
+- Classification and RMA benchmarking configuration
+
+When a Jira ticket is provided, use the ticket description, status, and comments as primary context. The user's manual description is supplementary.
+
+When analyzing a PDI:
+1. Determine if the issue is likely template-related or not
+2. If template-related, identify the specific configuration element
+3. Provide specific field names and values to check
+4. Suggest concrete remediation steps
+5. If NOT template-related, explain what else might cause it
+
+Start your response with exactly one of these verdicts on its own line:
+VERDICT: LIKELY TEMPLATE RELATED
+VERDICT: POSSIBLY TEMPLATE RELATED
+VERDICT: LIKELY NOT TEMPLATE RELATED
+
+Be specific — reference actual row labels, formula values, and configuration fields found in the template data provided.`
+
+      const userMessage = `I need you to analyze a potential PDI and determine if it is related to this template configuration.
+
+TEMPLATE: ${request.bundle.bundleName}
+AFFECTED AREA: ${request.affectedArea || 'Unknown'}
+
+PDI DESCRIPTION:
+${request.pdiDescription}
+
+${request.jiraTicket ? `JIRA TICKET: ${request.jiraTicket.key}
+Title: ${request.jiraTicket.summary}
+Status: ${request.jiraTicket.status}
+Priority: ${request.jiraTicket.priority}
+Components: ${request.jiraTicket.components.join(', ') || 'None'}
+Labels: ${request.jiraTicket.labels.join(', ') || 'None'}
+
+Description:
+${request.jiraTicket.description}
+
+Recent Comments:
+${request.jiraTicket.comments.join('\n\n')}
+` : ''}${request.errorMessage ? 'ERROR MESSAGE: ' + request.errorMessage + '\n' : ''}
+RELEVANT TEMPLATE CONFIGURATION:
+${templateContext}
+
+Please analyze:
+1. Is this issue likely related to template configuration? (Yes/No/Possibly)
+2. If yes or possibly: what specific configuration element is the likely cause?
+3. What exact fields/values should be checked in the template?
+4. What is the recommended fix or investigation path?
+5. If not template-related: what other areas should be investigated?`
+
+      const analysisText = await invokeBedrockModel(bedrockCreds, systemPrompt, userMessage, 2000)
+
+      let verdict: PDIAnalysisResult['verdict'] = 'possibly'
+      const upperText = analysisText.toUpperCase()
+      if (upperText.includes('LIKELY NOT TEMPLATE RELATED')) {
+        verdict = 'unlikely'
+      } else if (upperText.includes('LIKELY TEMPLATE RELATED')) {
+        verdict = 'likely'
+      } else if (upperText.includes('POSSIBLY TEMPLATE RELATED')) {
+        verdict = 'possibly'
+      }
+
+      return {
+        analysis: analysisText,
+        verdict,
+        templateName: request.bundle.bundleName,
+        analyzedAt: new Date().toISOString()
+      }
+    } catch (err) {
+      log.error('PDI analysis failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
+
+ipcMain.handle(
+  'app:exportPDIAnalysis',
+  async (
+    _event,
+    result: PDIAnalysisResult,
+    pdiDescription: string,
+    jiraTicket?: JiraTicketContext
+  ): Promise<string> => {
+    try {
+      const outDir = join(homedir(), 'Documents', 'bundle-migrator')
+      mkdirSync(outDir, { recursive: true })
+      const safeName = result.templateName.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const outPath = join(outDir, `PDI_Analysis_${safeName}_${Date.now()}.md`)
+      const jiraSection = jiraTicket
+        ? [
+            `## Jira Ticket`,
+            ``,
+            `**Key:** [${jiraTicket.key}](${jiraTicket.url})`,
+            `**Summary:** ${jiraTicket.summary}`,
+            `**Status:** ${jiraTicket.status}`,
+            `**Priority:** ${jiraTicket.priority}`,
+            ``
+          ].join('\n')
+        : ''
+      const md = [
+        `# PDI Analysis — ${result.templateName}`,
+        ``,
+        `**Analyzed:** ${new Date(result.analyzedAt).toLocaleString()}`,
+        ``,
+        jiraSection,
+        `## PDI Description`,
+        ``,
+        pdiDescription,
+        ``,
+        `## AI Analysis`,
+        ``,
+        result.analysis,
+        ``,
+        `---`,
+        `*AI analysis is advisory only. Always verify findings in Salesforce.*`
+      ].join('\n')
+      writeFileSync(outPath, md, 'utf-8')
+      log.info(`PDI analysis exported to ${outPath}`)
+      return outPath
+    } catch (err) {
+      log.error('PDI analysis export failed', err)
+      throw new Error(err instanceof Error ? err.message : String(err))
+    }
+  }
+)
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 

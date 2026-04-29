@@ -8,6 +8,20 @@ import type {
   FieldDiff
 } from '../../../shared/types'
 
+function getBedrockErrorMessage(err: string): string {
+  if (err.includes('BEDROCK_NOT_CONFIGURED'))
+    return 'AI features need setup. Add your Bedrock inference profile ARN in the credentials screen. Request a profile at bedrock-self-service.ncino.ai'
+  if (err.includes('BEDROCK_ACCESS_DENIED'))
+    return 'AWS permission error. Run genailogin in your terminal to refresh your session, then try again.'
+  if (err.includes('BEDROCK_TOKEN_EXPIRED'))
+    return 'AWS session expired. Run genailogin in your terminal to refresh your credentials and try again.'
+  if (err.includes('BEDROCK_PROFILE_NOT_FOUND'))
+    return 'Inference profile not found. Verify your ARN in the credentials screen at bedrock-self-service.ncino.ai'
+  if (err.includes('BEDROCK_VALIDATION_ERROR'))
+    return 'Invalid Bedrock configuration. Check your inference profile ARN in the credentials screen.'
+  return err
+}
+
 type StatusFilter = 'all' | 'only-in-a' | 'only-in-b' | 'config-different'
 type SeverityFilter = 'all' | 'high' | 'medium' | 'low'
 
@@ -304,6 +318,9 @@ export default function CompareResultsStep({ filePathA, filePathB, onBack, onSta
   const [search, setSearch] = useState('')
   const [exportPath, setExportPath] = useState('')
   const [expandAll, setExpandAll] = useState<boolean | null>(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   useEffect(() => {
     window.api.compareBundles(filePathA, filePathB)
@@ -323,6 +340,21 @@ export default function CompareResultsStep({ filePathA, filePathB, onBack, onSta
       })
       .catch((err) => { setError(err instanceof Error ? err.message : String(err)); setLoading(false) })
   }, [filePathA, filePathB])
+
+  const handleAIAnalysis = async (): Promise<void> => {
+    if (!comparison) return
+    setIsAnalyzing(true)
+    setAiError(null)
+    try {
+      const analysis = await window.api.analyzeComparison(comparison)
+      setAiAnalysis(analysis)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setAiError(getBedrockErrorMessage(msg))
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
 
   const handleExport = async (format: 'md' | 'csv' = 'md'): Promise<void> => {
     if (!comparison) return
@@ -584,6 +616,82 @@ export default function CompareResultsStep({ filePathA, filePathB, onBack, onSta
         </Box>
       )}
 
+      {isAnalyzing && (
+        <Box p="4" style={{
+          border: '1px solid var(--purple-4)',
+          borderRadius: 'var(--radius-3)',
+          background: 'var(--purple-1)'
+        }}>
+          <Flex align="center" gap="2">
+            <Text size="2" color="purple">Analyzing bundle differences...</Text>
+          </Flex>
+        </Box>
+      )}
+
+      {aiAnalysis && (
+        <Box p="4" style={{
+          border: '1px solid var(--purple-6)',
+          borderRadius: 'var(--radius-3)',
+          background: 'var(--purple-2)'
+        }}>
+          <Flex justify="between" align="center" mb="3">
+            <Flex align="center" gap="2">
+              <Text size="2" weight="bold" color="purple">AI Analysis</Text>
+            </Flex>
+            <Button
+              variant="ghost"
+              size="1"
+              onClick={() => setAiAnalysis(null)}
+            >
+              Dismiss
+            </Button>
+          </Flex>
+
+          <Box style={{ fontSize: 13, lineHeight: 1.6 }}>
+            {aiAnalysis.split('\n').map((line, i) =>
+              line.trim() === ''
+                ? <br key={i} />
+                : <Text key={i} as="p" size="2" mb="2">{line}</Text>
+            )}
+          </Box>
+
+          <Flex gap="2" mt="3">
+            <Button
+              variant="ghost"
+              size="1"
+              onClick={() => navigator.clipboard.writeText(aiAnalysis)}
+            >
+              Copy Analysis
+            </Button>
+            <Button
+              variant="ghost"
+              size="1"
+              onClick={handleAIAnalysis}
+              disabled={isAnalyzing}
+            >
+              Regenerate
+            </Button>
+          </Flex>
+
+          <Text size="1" color="gray" mt="2">
+            AI analysis is advisory only. Always verify findings in Salesforce.
+          </Text>
+        </Box>
+      )}
+
+      {aiError && (
+        <Box p="3" style={{
+          border: '1px solid var(--red-6)',
+          borderRadius: 'var(--radius-2)',
+          background: 'var(--red-2)'
+        }}>
+          <Text size="2" color="red">AI Analysis failed: {aiError}</Text>
+          <Button variant="ghost" size="1" onClick={handleAIAnalysis} mt="2">
+            Try Again
+          </Button>
+        </Box>
+      )}
+
       {exportPath && (
         <Box p="3" style={{ background: 'var(--green-3)', borderRadius: 'var(--radius-2)' }}>
           <Text size="2" color="green">
@@ -598,6 +706,13 @@ export default function CompareResultsStep({ filePathA, filePathB, onBack, onSta
           <>
             <Button variant="soft" onClick={() => handleExport('md')}>Export Markdown</Button>
             <Button variant="soft" onClick={() => handleExport('csv')}>Export CSV</Button>
+            <Button
+              variant="soft"
+              onClick={handleAIAnalysis}
+              disabled={isAnalyzing}
+            >
+              {isAnalyzing ? 'Analyzing...' : 'AI Analysis'}
+            </Button>
           </>
         )}
         <Button onClick={onStartOver}>Start Over</Button>

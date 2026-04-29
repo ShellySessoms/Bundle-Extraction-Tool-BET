@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import { resolve, join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { app } from 'electron'
+import type { BedrockCredentials } from '../shared/types'
 
 export interface SessionIdentity {
   username: string
@@ -24,8 +25,15 @@ export interface SfCredentials {
   instanceUrl?: string
 }
 
+export interface JiraCreds {
+  email: string
+  apiToken: string
+}
+
 let inMemorySourceCreds: SfCredentials | null = null
 let inMemoryTargetCreds: SfCredentials | null = null
+let inMemoryJiraCreds: JiraCreds | null = null
+let inMemoryBedrockCreds: BedrockCredentials | null = null
 
 function loadSavedCredentials(): void {
   if (existsSync(credentialsFilePath)) {
@@ -33,6 +41,8 @@ function loadSavedCredentials(): void {
       const data = JSON.parse(readFileSync(credentialsFilePath, 'utf-8'))
       if (data.source) inMemorySourceCreds = data.source
       if (data.target) inMemoryTargetCreds = data.target
+      if (data.jira) inMemoryJiraCreds = data.jira
+      if (data.bedrock) inMemoryBedrockCreds = data.bedrock
       log.info(`Loaded saved credentials from ${credentialsFilePath}`)
     } catch (err) {
       log.warn('Failed to read credentials.json, falling back to .env', err)
@@ -76,8 +86,31 @@ export function updateTargetCredentials(creds: SfCredentials): void {
   targetConnection = null
 }
 
-export function getAllCredentials(): { source: SfCredentials; target: SfCredentials } {
-  return { source: getSourceCredentials(), target: getTargetCredentials() }
+export function updateJiraCredentials(creds: JiraCreds): void {
+  inMemoryJiraCreds = { ...creds }
+}
+
+export function getJiraCredentials(): JiraCreds | null {
+  return inMemoryJiraCreds ? { ...inMemoryJiraCreds } : null
+}
+
+export function updateBedrockCredentials(creds: BedrockCredentials): void {
+  inMemoryBedrockCreds = { ...creds }
+}
+
+export function getBedrockCredentials(): BedrockCredentials | null {
+  return inMemoryBedrockCreds ? { ...inMemoryBedrockCreds } : null
+}
+
+export function getAllCredentials(): { source: SfCredentials; target: SfCredentials; jira?: JiraCreds; bedrock?: BedrockCredentials } {
+  const jira = getJiraCredentials()
+  const bedrock = getBedrockCredentials()
+  return {
+    source: getSourceCredentials(),
+    target: getTargetCredentials(),
+    ...(jira ? { jira } : {}),
+    ...(bedrock ? { bedrock } : {})
+  }
 }
 
 async function connect(creds: SfCredentials): Promise<Connection> {

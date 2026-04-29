@@ -46,6 +46,29 @@ async function mockExportCompareReport(app: ElectronApplication, outPath: string
   }, outPath)
 }
 
+async function mockAnalyzeComparison(app: ElectronApplication, response: string): Promise<void> {
+  await app.evaluate(({ ipcMain }, text) => {
+    ipcMain.removeHandler('app:analyzeComparison')
+    ipcMain.handle('app:analyzeComparison', () => Promise.resolve(text))
+  }, response)
+}
+
+async function mockAnalyzeComparisonError(app: ElectronApplication, errorMsg: string): Promise<void> {
+  await app.evaluate(({ ipcMain }, msg) => {
+    ipcMain.removeHandler('app:analyzeComparison')
+    ipcMain.handle('app:analyzeComparison', () => Promise.reject(new Error(msg)))
+  }, errorMsg)
+}
+
+async function mockAnalyzeComparisonSlow(app: ElectronApplication, delayMs: number): Promise<void> {
+  await app.evaluate(({ ipcMain }, ms) => {
+    ipcMain.removeHandler('app:analyzeComparison')
+    ipcMain.handle('app:analyzeComparison', () =>
+      new Promise((resolve) => setTimeout(() => resolve('Delayed analysis result'), ms))
+    )
+  }, delayMs)
+}
+
 async function ensureOnModeStep(): Promise<void> {
   const isModeStep = await page.locator('text=Compare Bundles').isVisible().catch(() => false)
   if (isModeStep) return
@@ -802,5 +825,161 @@ test.describe('Enhancement - Color-coded Diffs', () => {
       await expect(redCell).toBeVisible()
       await expect(greenCell).toBeVisible()
     }
+  })
+})
+
+// ===========================================================================
+// AI Analysis: Button Visibility
+// ===========================================================================
+test.describe('AI Analysis - Button Visibility', () => {
+  test('AI Analysis button is visible on results page with differences', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await expect(page.locator('button', { hasText: 'AI Analysis' })).toBeVisible()
+  })
+
+  test('AI Analysis button is NOT visible for identical bundles', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_IDENTICAL)
+    await expect(page.locator('button', { hasText: 'AI Analysis' })).toHaveCount(0)
+  })
+
+  test('AI Analysis button shows correct initial label', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    const btn = page.locator('button', { hasText: 'AI Analysis' })
+    await expect(btn).toHaveText('AI Analysis')
+  })
+})
+
+// ===========================================================================
+// AI Analysis: Loading State
+// ===========================================================================
+test.describe('AI Analysis - Loading State', () => {
+  test('shows loading state while analyzing', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparisonSlow(electronApp, 3000)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=Analyzing bundle differences...')).toBeVisible()
+  })
+
+  test('AI Analysis button is disabled and shows Analyzing... during analysis', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparisonSlow(electronApp, 3000)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    const btn = page.locator('button', { hasText: 'Analyzing...' })
+    await expect(btn).toBeVisible()
+    await expect(btn).toBeDisabled()
+  })
+})
+
+// ===========================================================================
+// AI Analysis: Success
+// ===========================================================================
+test.describe('AI Analysis - Success', () => {
+  const MOCK_ANALYSIS = 'These two bundles differ primarily in their Income Statement configuration.\n\nBundle B includes additional rows for Operating Expenses and Rent Roll.\n\nRecommendation: Use Bundle A for standard commercial lending.'
+
+  test('shows analysis panel after successful analysis', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=AI Analysis').first()).toBeVisible()
+    await expect(page.locator('text=These two bundles differ primarily')).toBeVisible()
+  })
+
+  test('analysis panel shows rendered analysis text', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=Bundle B includes additional rows')).toBeVisible()
+    await expect(page.locator('text=Recommendation: Use Bundle A')).toBeVisible()
+  })
+
+  test('analysis panel shows Copy Analysis button', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('button', { hasText: 'Copy Analysis' })).toBeVisible()
+  })
+
+  test('analysis panel shows Regenerate button', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('button', { hasText: 'Regenerate' })).toBeVisible()
+  })
+
+  test('analysis panel shows advisory disclaimer', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(
+      page.locator('text=AI analysis is advisory only. Always verify findings in Salesforce.')
+    ).toBeVisible()
+  })
+
+  test('Dismiss button hides analysis panel', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, MOCK_ANALYSIS)
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=These two bundles differ primarily')).toBeVisible()
+
+    await page.locator('button', { hasText: 'Dismiss' }).click()
+    await expect(page.locator('text=These two bundles differ primarily')).toHaveCount(0)
+  })
+})
+
+// ===========================================================================
+// AI Analysis: Error Handling
+// ===========================================================================
+test.describe('AI Analysis - Error Handling', () => {
+  test('shows error panel when analysis fails', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparisonError(electronApp, 'API key not configured')
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=/AI Analysis failed:.*API key not configured/')).toBeVisible()
+  })
+
+  test('error panel shows Try Again button', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparisonError(electronApp, 'Network timeout')
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('button', { hasText: 'Try Again' })).toBeVisible()
+  })
+
+  test('Try Again triggers re-analysis and shows success on retry', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparisonError(electronApp, 'Temporary failure')
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=/AI Analysis failed:.*Temporary failure/')).toBeVisible()
+
+    await mockAnalyzeComparison(electronApp, 'Retry succeeded — bundles differ in key areas.')
+    await page.locator('button', { hasText: 'Try Again' }).click()
+    await expect(page.locator('text=Retry succeeded')).toBeVisible()
+  })
+})
+
+// ===========================================================================
+// AI Analysis: Regenerate
+// ===========================================================================
+test.describe('AI Analysis - Regenerate', () => {
+  test('Regenerate button triggers new analysis with fresh content', async () => {
+    await navigateToCompareResults(FIXTURE_A, FIXTURE_B)
+    await mockAnalyzeComparison(electronApp, 'First analysis: bundles have minor differences.')
+
+    await page.locator('button', { hasText: 'AI Analysis' }).click()
+    await expect(page.locator('text=First analysis: bundles have minor differences.')).toBeVisible()
+
+    await mockAnalyzeComparison(electronApp, 'Second analysis: significant configuration gaps found.')
+    await page.locator('button', { hasText: 'Regenerate' }).click()
+    await expect(page.locator('text=Second analysis: significant configuration gaps found.')).toBeVisible({ timeout: 10_000 })
   })
 })

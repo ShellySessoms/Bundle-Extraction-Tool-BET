@@ -4,6 +4,7 @@ import type { AppMode } from '../../../shared/types'
 
 interface Props {
   onNext: (mode: AppMode) => void
+  hasAIEnabled?: boolean
 }
 
 const MODES: { mode: AppMode; icon: string; title: string; description: string }[] = [
@@ -30,10 +31,16 @@ const MODES: { mode: AppMode; icon: string; title: string; description: string }
     icon: '🔍',
     title: 'Compare Bundles',
     description: 'Load two bundle JSON files and see a plain-English diff of what configuration is different.'
+  },
+  {
+    mode: 'pdi-insight',
+    icon: '🧠',
+    title: 'PDI Insight',
+    description: 'Load a template and describe an issue to get AI analysis on whether it might be template-related.'
   }
 ]
 
-export default function ModeStep({ onNext }: Props): React.ReactElement {
+export default function ModeStep({ onNext, hasAIEnabled }: Props): React.ReactElement {
   return (
     <Flex direction="column" gap="5">
       <Flex direction="column" gap="1">
@@ -74,6 +81,16 @@ export default function ModeStep({ onNext }: Props): React.ReactElement {
               <Text size="6">{icon}</Text>
               <Heading size="3">{title}</Heading>
               <Text size="2" color="gray">{description}</Text>
+              {mode === 'pdi-insight' && !hasAIEnabled && (
+                <Text size="1" color="orange">
+                  Requires Bedrock inference profile setup
+                </Text>
+              )}
+              {mode === 'compare' && !hasAIEnabled && (
+                <Text size="1" color="gray">
+                  AI Analysis available after Bedrock setup
+                </Text>
+              )}
             </Flex>
           </Box>
         ))}

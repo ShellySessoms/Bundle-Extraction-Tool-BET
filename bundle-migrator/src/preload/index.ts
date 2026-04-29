@@ -9,7 +9,11 @@ import type {
   ImportSummary,
   ExtractionOptions,
   ProgressEvent,
-  AllCredentials
+  AllCredentials,
+  ManifestPackage,
+  PDIAnalysisRequest,
+  PDIAnalysisResult,
+  JiraTicketContext
 } from '../shared/types'
 
 const api = {
@@ -34,6 +38,12 @@ const api = {
 
   openInFinder: (filePath: string): Promise<void> => ipcRenderer.invoke('app:openInFinder', filePath),
 
+  showInFinder: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('app:showInFinder', filePath),
+
+  openFolder: (folderPath: string): Promise<void> =>
+    ipcRenderer.invoke('app:openFolder', folderPath),
+
   renameExportFile: (currentPath: string, newFileName: string): Promise<string> =>
     ipcRenderer.invoke('app:renameExportFile', currentPath, newFileName),
 
@@ -52,6 +62,25 @@ const api = {
 
   exportCompareCsv: (comparison: BundleComparison): Promise<string> =>
     ipcRenderer.invoke('app:exportCompareCsv', comparison),
+
+  analyzeComparison: (comparison: BundleComparison): Promise<string> =>
+    ipcRenderer.invoke('app:analyzeComparison', comparison),
+
+  analyzePDI: (request: PDIAnalysisRequest): Promise<PDIAnalysisResult> =>
+    ipcRenderer.invoke('app:analyzePDI', request),
+
+  fetchJiraTicket: (jiraUrl: string): Promise<JiraTicketContext> =>
+    ipcRenderer.invoke('app:fetchJiraTicket', jiraUrl),
+
+  exportPDIAnalysis: (
+    result: PDIAnalysisResult,
+    pdiDescription: string,
+    jiraTicket?: JiraTicketContext
+  ): Promise<string> =>
+    ipcRenderer.invoke('app:exportPDIAnalysis', result, pdiDescription, jiraTicket),
+
+  generateManifest: (bundle: BundleExport, outputDir: string): Promise<ManifestPackage> =>
+    ipcRenderer.invoke('app:generateManifest', bundle, outputDir),
 
   getCredentials: (): Promise<AllCredentials> => ipcRenderer.invoke('app:getCredentials'),
 
