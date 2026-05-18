@@ -12,8 +12,7 @@ import type {
   AllCredentials,
   ManifestPackage,
   PDIAnalysisRequest,
-  PDIAnalysisResult,
-  JiraTicketContext
+  PDIAnalysisResult
 } from '../shared/types'
 
 const api = {
@@ -31,6 +30,8 @@ const api = {
 
   importBundle: (exportFilePath: string): Promise<ImportSummary> =>
     ipcRenderer.invoke('sf:importBundle', exportFilePath),
+
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('app:openExternal', url),
 
   openLogFile: (): Promise<void> => ipcRenderer.invoke('app:openLogFile'),
 
@@ -69,15 +70,12 @@ const api = {
   analyzePDI: (request: PDIAnalysisRequest): Promise<PDIAnalysisResult> =>
     ipcRenderer.invoke('app:analyzePDI', request),
 
-  fetchJiraTicket: (jiraUrl: string): Promise<JiraTicketContext> =>
-    ipcRenderer.invoke('app:fetchJiraTicket', jiraUrl),
-
   exportPDIAnalysis: (
     result: PDIAnalysisResult,
     pdiDescription: string,
-    jiraTicket?: JiraTicketContext
+    jiraUrl?: string
   ): Promise<string> =>
-    ipcRenderer.invoke('app:exportPDIAnalysis', result, pdiDescription, jiraTicket),
+    ipcRenderer.invoke('app:exportPDIAnalysis', result, pdiDescription, jiraUrl),
 
   generateManifest: (bundle: BundleExport, outputDir: string): Promise<ManifestPackage> =>
     ipcRenderer.invoke('app:generateManifest', bundle, outputDir),

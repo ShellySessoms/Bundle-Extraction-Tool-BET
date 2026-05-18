@@ -4,6 +4,8 @@ import type { AppMode, BundleExport } from '../../../shared/types'
 
 interface Props {
   bundleExport: BundleExport
+  allExtractedBundles?: BundleExport[]
+  onSelectBundle?: (bundle: BundleExport) => void
   mode: AppMode
   onNext: () => void
   onBack: () => void
@@ -63,7 +65,7 @@ function CollapsibleList({
   )
 }
 
-export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStartOver, onFileRenamed }: Props): React.ReactElement {
+export default function ReviewStep({ bundleExport, allExtractedBundles, onSelectBundle, mode, onNext, onBack, onStartOver, onFileRenamed }: Props): React.ReactElement {
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [renameError, setRenameError] = useState('')
@@ -139,6 +141,47 @@ export default function ReviewStep({ bundleExport, mode, onNext, onBack, onStart
 
   return (
     <Flex direction="column" gap="4">
+      {allExtractedBundles && allExtractedBundles.length > 1 && (
+        <Box p="3" style={{
+          background: 'var(--blue-2)',
+          border: '1px solid var(--blue-6)',
+          borderRadius: 'var(--radius-2)'
+        }}>
+          <Flex align="center" gap="3">
+            <Text size="2" weight="medium">
+              {allExtractedBundles.length} templates extracted — reviewing:
+            </Text>
+            <select
+              value={bundleExport.bundleId}
+              onChange={(e) => {
+                const selected = allExtractedBundles.find(
+                  (b) => b.bundleId === e.target.value
+                )
+                if (selected) onSelectBundle?.(selected)
+              }}
+              style={{
+                fontSize: 13,
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid var(--blue-7)',
+                background: 'var(--blue-1)',
+                cursor: 'pointer',
+                minWidth: 200
+              }}
+            >
+              {allExtractedBundles.map((b) => (
+                <option key={b.bundleId} value={b.bundleId}>
+                  {b.bundleName}
+                </option>
+              ))}
+            </select>
+            <Text size="1" color="gray">
+              {allExtractedBundles.length} files saved to disk
+            </Text>
+          </Flex>
+        </Box>
+      )}
+
       <Heading size="5">Review {mode === 'upsert-only' ? 'Bundle Data' : 'Extraction'}</Heading>
 
       <Text size="2" color="gray">

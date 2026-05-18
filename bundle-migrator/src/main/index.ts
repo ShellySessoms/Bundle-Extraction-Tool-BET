@@ -5,14 +5,14 @@ import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
 import log from 'electron-log/main'
 import { mkdirSync } from 'fs'
 import type { Connection } from '@jsforce/jsforce-node'
-import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, updateJiraCredentials, updateBedrockCredentials, getJiraCredentials, getAllCredentials, credentialsFilePath, resolveIdentity } from './sfConnection'
+import { connectSource, connectTarget, updateSourceCredentials, updateTargetCredentials, updateJiraCredentials, updateBedrockCredentials, getAllCredentials, credentialsFilePath, resolveIdentity } from './sfConnection'
 import { extractBundle } from './extractor'
 import { importBundle } from './importer'
 import { compareBundles, comparisonToMarkdown, comparisonToCsv } from './bundleComparator'
 import { generateManifest } from './manifestGenerator'
 import { buildComparisonSummaryForAI, buildTemplateContextForPDI } from './aiHelpers'
 import { invokeBedrockModel } from './bedrockClient'
-import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials, ExtractionOptions, ManifestPackage, PDIAnalysisRequest, PDIAnalysisResult, JiraTicketContext } from '../shared/types'
+import type { OrgStatus, OrgCredentials, BundleListItem, BundleExport, BundleComparison, ImportSummary, ProgressEvent, AllCredentials, ExtractionOptions, ManifestPackage, PDIAnalysisRequest, PDIAnalysisResult } from '../shared/types'
 
 log.initialize()
 
@@ -267,6 +267,10 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('app:openExternal', async (_event, url: string) => {
+  await shell.openExternal(url)
+})
+
 ipcMain.handle('app:openLogFile', async () => {
   try {
     await shell.openPath(logFilePath)
@@ -518,100 +522,6 @@ Please provide:
   }
 )
 
-ipcMain.handle(
-  'app:fetchJiraTicket',
-  async (_event, jiraUrl: string): Promise<JiraTicketContext> => {
-    try {
-      const keyMatch = jiraUrl.match(/([A-Z]+-\d+)/)
-      if (!keyMatch) {
-        throw new Error('Could not extract Jira ticket key from URL. Expected format: COMM-12345')
-      }
-      const ticketKey = keyMatch[1]
-
-      const jiraCreds = getJiraCredentials()
-      if (!jiraCreds?.email || !jiraCreds?.apiToken) {
-        throw new Error(
-          'JIRA_NOT_CONFIGURED: No Jira credentials found. ' +
-          'Add your Jira email and API token in the credentials screen.'
-        )
-      }
-
-      const jiraBaseUrl = 'https://ncinodev.atlassian.net'
-      const authHeader =
-        'Basic ' + Buffer.from(`${jiraCreds.email}:${jiraCreds.apiToken}`).toString('base64')
-
-      const issueResponse = await fetch(
-        `${jiraBaseUrl}/rest/api/3/issue/${ticketKey}?fields=summary,description,status,priority,labels,components,comment`,
-        {
-          headers: {
-            Authorization: authHeader,
-            Accept: 'application/json'
-          }
-        }
-      )
-
-      if (!issueResponse.ok) {
-        if (issueResponse.status === 401) {
-          throw new Error(
-            'JIRA_AUTH_FAILED: Invalid Jira credentials. Check your email and API token.'
-          )
-        }
-        if (issueResponse.status === 404) {
-          throw new Error(
-            `JIRA_NOT_FOUND: Ticket ${ticketKey} not found or you don't have access.`
-          )
-        }
-        throw new Error(`Jira API error ${issueResponse.status}`)
-      }
-
-      const issue = (await issueResponse.json()) as Record<string, unknown>
-      const fields = issue.fields as Record<string, unknown>
-
-      const extractText = (adfNode: unknown): string => {
-        if (!adfNode) return ''
-        if (typeof adfNode === 'string') return adfNode
-        const node = adfNode as Record<string, unknown>
-        if (node.type === 'text') return (node.text as string) || ''
-        if (Array.isArray(node.content)) {
-          return (node.content as unknown[]).map(extractText).join(' ')
-        }
-        return ''
-      }
-
-      const description = extractText(fields.description).substring(0, 2000).trim()
-
-      const commentField = fields.comment as Record<string, unknown> | undefined
-      const commentsList = (commentField?.comments ?? []) as Record<string, unknown>[]
-      const comments = commentsList.slice(-3).map((c) => {
-        const author = (c.author as Record<string, unknown>)?.displayName ?? 'Unknown'
-        const body = extractText(c.body).substring(0, 500)
-        return `${author}: ${body}`
-      })
-
-      const statusObj = fields.status as Record<string, unknown> | undefined
-      const priorityObj = fields.priority as Record<string, unknown> | undefined
-      const componentsArr = (fields.components ?? []) as Record<string, unknown>[]
-
-      log.info('Fetched Jira ticket', { key: ticketKey, summary: fields.summary })
-
-      return {
-        key: ticketKey,
-        url: jiraUrl,
-        summary: (fields.summary as string) ?? '',
-        description,
-        status: (statusObj?.name as string) ?? 'Unknown',
-        priority: (priorityObj?.name as string) ?? 'Unknown',
-        labels: (fields.labels ?? []) as string[],
-        components: componentsArr.map((c) => c.name as string),
-        comments,
-        fetchedAt: new Date().toISOString()
-      }
-    } catch (err) {
-      log.error('Jira ticket fetch failed', err)
-      throw new Error(err instanceof Error ? err.message : String(err))
-    }
-  }
-)
 
 ipcMain.handle(
   'app:analyzePDI',
@@ -642,8 +552,6 @@ You have deep knowledge of:
 - Debt Schedule configuration and its relationship to spread periods
 - Classification and RMA benchmarking configuration
 
-When a Jira ticket is provided, use the ticket description, status, and comments as primary context. The user's manual description is supplementary.
-
 When analyzing a PDI:
 1. Determine if the issue is likely template-related or not
 2. If template-related, identify the specific configuration element
@@ -665,20 +573,7 @@ AFFECTED AREA: ${request.affectedArea || 'Unknown'}
 
 PDI DESCRIPTION:
 ${request.pdiDescription}
-
-${request.jiraTicket ? `JIRA TICKET: ${request.jiraTicket.key}
-Title: ${request.jiraTicket.summary}
-Status: ${request.jiraTicket.status}
-Priority: ${request.jiraTicket.priority}
-Components: ${request.jiraTicket.components.join(', ') || 'None'}
-Labels: ${request.jiraTicket.labels.join(', ') || 'None'}
-
-Description:
-${request.jiraTicket.description}
-
-Recent Comments:
-${request.jiraTicket.comments.join('\n\n')}
-` : ''}${request.errorMessage ? 'ERROR MESSAGE: ' + request.errorMessage + '\n' : ''}
+${request.jiraUrl ? `\nJIRA TICKET: ${request.jiraUrl}\n` : ''}${request.errorMessage ? 'ERROR MESSAGE: ' + request.errorMessage + '\n' : ''}
 RELEVANT TEMPLATE CONFIGURATION:
 ${templateContext}
 
@@ -720,23 +615,15 @@ ipcMain.handle(
     _event,
     result: PDIAnalysisResult,
     pdiDescription: string,
-    jiraTicket?: JiraTicketContext
+    jiraUrl?: string
   ): Promise<string> => {
     try {
       const outDir = join(homedir(), 'Documents', 'bundle-migrator')
       mkdirSync(outDir, { recursive: true })
       const safeName = result.templateName.replace(/[^a-zA-Z0-9_-]/g, '_')
       const outPath = join(outDir, `PDI_Analysis_${safeName}_${Date.now()}.md`)
-      const jiraSection = jiraTicket
-        ? [
-            `## Jira Ticket`,
-            ``,
-            `**Key:** [${jiraTicket.key}](${jiraTicket.url})`,
-            `**Summary:** ${jiraTicket.summary}`,
-            `**Status:** ${jiraTicket.status}`,
-            `**Priority:** ${jiraTicket.priority}`,
-            ``
-          ].join('\n')
+      const jiraSection = jiraUrl
+        ? [`## Jira Ticket`, ``, `**URL:** ${jiraUrl}`, ``].join('\n')
         : ''
       const md = [
         `# PDI Analysis — ${result.templateName}`,

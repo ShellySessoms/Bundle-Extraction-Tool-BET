@@ -26,11 +26,12 @@ export default function TargetConnectStep({
     initialCreds.username ? { ...initialCreds } : { ...EMPTY_CREDS }
   )
 
-  const connectTarget = async (): Promise<void> => {
+  const connectTarget = async (resolvedCreds: OrgCredentials): Promise<void> => {
     setStatus('connecting')
     setError('')
+    setCreds(resolvedCreds)
     try {
-      const result = await window.api.connectTarget(creds)
+      const result = await window.api.connectTarget(resolvedCreds)
       if (result.connected) {
         onTargetConnected(result)
         setStatus('connected')

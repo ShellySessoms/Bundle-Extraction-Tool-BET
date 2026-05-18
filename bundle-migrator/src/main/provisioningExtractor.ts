@@ -55,6 +55,66 @@ const RELEVANT_KEYWORDS = [
   'migration'
 ]
 
+interface DescribeField {
+  name: string
+  label: string
+  type: string
+  custom: boolean
+  nillable: boolean
+  defaultedOnCreate?: boolean
+  calculated?: boolean
+  calculatedFormula?: string | null
+  referenceTo?: string[] | null
+  relationshipName?: string | null
+  picklistValues?: Array<{
+    value: string
+    label?: string | null
+    defaultValue?: boolean
+    active?: boolean
+  }> | null
+  restrictedPicklist?: boolean
+  precision?: number | null
+  scale?: number | null
+  length?: number | null
+}
+
+function buildCustomFieldDef(objectApiName: string, f: DescribeField): CustomFieldDef {
+  const def: CustomFieldDef = {
+    objectApiName,
+    fieldApiName: f.name,
+    label: f.label,
+    dataType: f.type,
+    isRequired: f.nillable === false && f.defaultedOnCreate === false,
+    usedByScheduleNames: [],
+
+    formula: f.calculated && f.calculatedFormula ? f.calculatedFormula : undefined,
+    formulaTreatBlanksAs: f.calculated ? 'BlankAsZero' : undefined,
+
+    referenceTo: f.type === 'reference' && f.referenceTo?.length
+      ? f.referenceTo[0]
+      : undefined,
+    relationshipName: f.type === 'reference'
+      ? (f.relationshipName ?? f.name.replace('__c', '')) ?? undefined
+      : undefined,
+
+    picklistValues: (f.type === 'picklist' || f.type === 'multipicklist') && f.picklistValues?.length
+      ? f.picklistValues.map((pv) => ({
+          value: pv.value,
+          label: pv.label ?? pv.value,
+          isDefault: pv.defaultValue ?? false,
+          isActive: pv.active ?? true
+        }))
+      : undefined,
+    isRestrictedPicklist: f.restrictedPicklist ?? false,
+
+    precision: f.precision ?? undefined,
+    scale: f.scale ?? undefined,
+    length: f.length ?? undefined
+  }
+
+  return def
+}
+
 export async function extractProvisioningMetadata(
   conn: Connection,
   bundle: BundleExport
@@ -239,14 +299,7 @@ export async function extractProvisioningMetadata(
     const scheduleEntryDescribe = await conn.describe('LLC_BI__Schedule_Entry__c')
     customScheduleEntryFields = scheduleEntryDescribe.fields
       .filter((f) => f.custom && !f.name.startsWith('LLC_BI__') && !f.name.startsWith('nFORCE__'))
-      .map((f) => ({
-        objectApiName: 'LLC_BI__Schedule_Entry__c',
-        fieldApiName: f.name,
-        label: f.label,
-        dataType: f.type,
-        isRequired: f.nillable === false,
-        usedByScheduleNames: []
-      }))
+      .map((f) => buildCustomFieldDef('LLC_BI__Schedule_Entry__c', f))
     logInfo(`Custom Schedule_Entry fields: ${customScheduleEntryFields.length}`)
   } catch (err) {
     warnings.push(`Could not describe LLC_BI__Schedule_Entry__c: ${err instanceof Error ? err.message : String(err)}`)
@@ -256,14 +309,7 @@ export async function extractProvisioningMetadata(
     const debtDescribe = await conn.describe('LLC_BI__Debt__c')
     customDebtFields = debtDescribe.fields
       .filter((f) => f.custom && !f.name.startsWith('LLC_BI__') && !f.name.startsWith('nFORCE__'))
-      .map((f) => ({
-        objectApiName: 'LLC_BI__Debt__c',
-        fieldApiName: f.name,
-        label: f.label,
-        dataType: f.type,
-        isRequired: f.nillable === false,
-        usedByScheduleNames: []
-      }))
+      .map((f) => buildCustomFieldDef('LLC_BI__Debt__c', f))
     logInfo(`Custom Debt fields: ${customDebtFields.length}`)
   } catch (err) {
     warnings.push(`Could not describe LLC_BI__Debt__c: ${err instanceof Error ? err.message : String(err)}`)

@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Box, Flex, Heading, Text, Button, TextArea, TextField, Select } from '@radix-ui/themes'
-import type { BundleExport, JiraTicketContext } from '../../../shared/types'
+import type { BundleExport, BedrockCredentials } from '../../../shared/types'
+import BedrockSetupBanner from './BedrockSetupBanner'
 
 const AFFECTED_AREAS = [
   'Any',
@@ -19,12 +20,13 @@ interface Props {
     pdiDescription: string,
     affectedArea: string,
     errorMessage: string,
-    jiraTicket: JiraTicketContext | null
+    jiraUrl: string
   ) => void
   onBack: () => void
+  onBedrockSaved?: (creds: BedrockCredentials) => void
 }
 
-export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.ReactElement {
+export default function PDIInsightStep({ onAnalyze, onBack, onBedrockSaved }: Props): React.ReactElement {
   const [bundle, setBundle] = useState<BundleExport | null>(null)
   const [filePath, setFilePath] = useState('')
   const [loadError, setLoadError] = useState('')
@@ -32,9 +34,17 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
   const [affectedArea, setAffectedArea] = useState('Any')
   const [errorMessage, setErrorMessage] = useState('')
   const [jiraUrl, setJiraUrl] = useState('')
-  const [jiraTicket, setJiraTicket] = useState<JiraTicketContext | null>(null)
-  const [fetchingJira, setFetchingJira] = useState(false)
-  const [jiraError, setJiraError] = useState<string | null>(null)
+  const [hasBedrockConfigured, setBedrockConfigured] = useState(false)
+  const [existingArn, setExistingArn] = useState('')
+
+  useEffect(() => {
+    window.api.getCredentials().then((creds) => {
+      if (creds.bedrock?.inferenceProfileArn) {
+        setBedrockConfigured(true)
+        setExistingArn(creds.bedrock.inferenceProfileArn)
+      }
+    })
+  }, [])
 
   const handleBrowse = async (): Promise<void> => {
     try {
@@ -49,33 +59,7 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
     }
   }
 
-  const handleFetchJira = async (): Promise<void> => {
-    if (!jiraUrl.trim()) return
-    setFetchingJira(true)
-    setJiraError(null)
-    try {
-      const ticket = await window.api.fetchJiraTicket(jiraUrl)
-      setJiraTicket(ticket)
-      if (!pdiDescription.trim()) {
-        setPdiDescription(ticket.summary)
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('JIRA_NOT_CONFIGURED')) {
-        setJiraError('Jira not configured. Add your Atlassian credentials in the credentials screen.')
-      } else if (msg.includes('JIRA_AUTH_FAILED')) {
-        setJiraError('Invalid Jira credentials. Check your email and API token in credentials.')
-      } else if (msg.includes('JIRA_NOT_FOUND')) {
-        setJiraError('Ticket not found. Check the URL or ticket key.')
-      } else {
-        setJiraError(msg)
-      }
-    } finally {
-      setFetchingJira(false)
-    }
-  }
-
-  const canAnalyze = bundle && (pdiDescription.trim().length >= 10 || jiraTicket)
+  const canAnalyze = bundle && hasBedrockConfigured && pdiDescription.trim().length >= 10
 
   const recordCount = bundle
     ? Object.values(bundle.records).reduce((sum, arr) => sum + arr.length, 0)
@@ -88,6 +72,17 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
       <Text size="2" color="gray">
         Load a template and describe the issue. AI will analyze whether it might be template-related.
       </Text>
+
+      {!hasBedrockConfigured && (
+        <BedrockSetupBanner
+          mode="required"
+          currentArn={existingArn}
+          onSaved={(creds) => {
+            setBedrockConfigured(true)
+            onBedrockSaved?.(creds)
+          }}
+        />
+      )}
 
       {/* File picker */}
       <Box p="4" style={{ border: '1px solid var(--gray-5)', borderRadius: 'var(--radius-3)' }}>
@@ -120,63 +115,19 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
         )}
       </Box>
 
-      {/* Jira Ticket */}
+      {/* Jira Ticket URL */}
       <Box>
-        <Text size="2" weight="medium" mb="1" as="label" style={{ display: 'block' }}>
-          Jira Ticket (optional)
+        <Text size="2" weight="medium">Jira Ticket URL (optional)</Text>
+        <TextField.Root
+          size="2"
+          placeholder="https://ncinodev.atlassian.net/browse/COMM-67578"
+          value={jiraUrl}
+          onChange={(e) => setJiraUrl(e.target.value)}
+        />
+        <Text size="1" color="gray">
+          The ticket URL will be included as context in the AI analysis.
+          Paste the ticket description below for best results.
         </Text>
-        <Flex gap="2" align="end">
-          <Box style={{ flex: 1 }}>
-            <TextField.Root
-              size="2"
-              placeholder="https://ncinodev.atlassian.net/browse/COMM-67578 or COMM-67578"
-              value={jiraUrl}
-              onChange={(e) => setJiraUrl(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleFetchJira() }}
-            />
-          </Box>
-          <Button
-            variant="soft"
-            onClick={handleFetchJira}
-            disabled={!jiraUrl.trim() || fetchingJira}
-          >
-            {fetchingJira ? 'Fetching...' : 'Fetch Ticket'}
-          </Button>
-        </Flex>
-
-        {jiraTicket && (
-          <Box mt="2" p="3" style={{
-            background: 'var(--blue-2)',
-            border: '1px solid var(--blue-6)',
-            borderRadius: 'var(--radius-2)'
-          }}>
-            <Flex justify="between" align="start">
-              <Box>
-                <Flex align="center" gap="2">
-                  <Text size="2" weight="bold" color="blue">{jiraTicket.key}</Text>
-                  <Text size="2">{jiraTicket.summary}</Text>
-                </Flex>
-                <Flex gap="2" mt="1">
-                  <Text size="1" color="gray">Status: {jiraTicket.status}</Text>
-                  <Text size="1" color="gray">Priority: {jiraTicket.priority}</Text>
-                  {jiraTicket.components.length > 0 && (
-                    <Text size="1" color="gray">Components: {jiraTicket.components.join(', ')}</Text>
-                  )}
-                </Flex>
-              </Box>
-              <Button variant="ghost" size="1" onClick={() => setJiraTicket(null)}>
-                Remove
-              </Button>
-            </Flex>
-            <Text size="1" color="green" mt="1">
-              Ticket details will be included in AI analysis
-            </Text>
-          </Box>
-        )}
-
-        {jiraError && (
-          <Text size="1" color="red" mt="1">{jiraError}</Text>
-        )}
       </Box>
 
       {/* Affected area and error message */}
@@ -211,9 +162,7 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
       {/* PDI Description */}
       <Box>
         <Text size="2" weight="medium" mb="1" as="label" style={{ display: 'block' }}>
-          {jiraTicket
-            ? 'Additional context (optional — Jira ticket loaded)'
-            : 'Describe the PDI or issue being reported'}
+          Describe the PDI or issue being reported
         </Text>
         <TextArea
           size="3"
@@ -222,7 +171,7 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
           value={pdiDescription}
           onChange={(e) => setPdiDescription(e.target.value)}
         />
-        {!jiraTicket && pdiDescription.length > 0 && pdiDescription.trim().length < 10 && (
+        {pdiDescription.length > 0 && pdiDescription.trim().length < 10 && (
           <Text size="1" color="red" mt="1">Please provide at least 10 characters</Text>
         )}
       </Box>
@@ -233,7 +182,7 @@ export default function PDIInsightStep({ onAnalyze, onBack }: Props): React.Reac
         <Button
           disabled={!canAnalyze}
           onClick={() => {
-            if (bundle) onAnalyze(bundle, pdiDescription, affectedArea, errorMessage, jiraTicket)
+            if (bundle) onAnalyze(bundle, pdiDescription, affectedArea, errorMessage, jiraUrl)
           }}
         >
           Analyze with AI &rarr;

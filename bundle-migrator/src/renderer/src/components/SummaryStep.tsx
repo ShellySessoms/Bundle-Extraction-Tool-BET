@@ -211,6 +211,37 @@ export default function SummaryStep({ summary, mode, exportFilePath, bundleExpor
         </table>
       </Box>
 
+      {/* Schema deployment results */}
+      {summary.schemaDeployResult && (
+        <Box p="3" style={{ border: '1px solid var(--gray-4)', borderRadius: 'var(--radius-2)' }}>
+          <Flex direction="column" gap="2">
+            <Text size="2" weight="bold">Schema Deployment</Text>
+            {summary.schemaDeployResult.deployed.length > 0 && (
+              <Text size="2" color="green">
+                {summary.schemaDeployResult.deployed.length} custom field(s) deployed: {summary.schemaDeployResult.deployed.join(', ')}
+              </Text>
+            )}
+            {summary.schemaDeployResult.skipped.length > 0 && (
+              <Text size="2" color="gray">
+                {summary.schemaDeployResult.skipped.length} field(s) skipped (already exist or require manual creation)
+              </Text>
+            )}
+            {summary.schemaDeployResult.failed.length > 0 && (
+              <Flex direction="column" gap="1">
+                <Text size="2" color="red">
+                  {summary.schemaDeployResult.failed.length} field(s) failed to deploy:
+                </Text>
+                {summary.schemaDeployResult.failed.map((f) => (
+                  <Text key={f.fieldName} size="1" color="red" style={{ fontFamily: 'monospace', paddingLeft: 8 }}>
+                    {f.fieldName}: {f.error}
+                  </Text>
+                ))}
+              </Flex>
+            )}
+          </Flex>
+        </Box>
+      )}
+
       {/* Manifest results panel */}
       {manifestState === 'done' && manifestResult && (
         <Box p="4" style={{ border: '1px solid var(--blue-6)', borderRadius: 'var(--radius-3)', background: 'var(--blue-2)' }}>

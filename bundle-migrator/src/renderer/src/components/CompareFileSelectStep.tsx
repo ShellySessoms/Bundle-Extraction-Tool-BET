@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Box, Flex, Heading, Text, Button } from '@radix-ui/themes'
-import type { BundleExport } from '../../../shared/types'
+import type { BundleExport, BedrockCredentials } from '../../../shared/types'
+import BedrockSetupBanner from './BedrockSetupBanner'
 
 interface FileSummary {
   path: string
@@ -13,6 +14,7 @@ interface FileSummary {
 interface Props {
   onNext: (filePathA: string, filePathB: string) => void
   onBack: () => void
+  onBedrockSaved?: (creds: BedrockCredentials) => void
 }
 
 function parseBundleFile(data: BundleExport, path: string): FileSummary {
@@ -38,11 +40,20 @@ function FileSummaryCard({ label, summary }: { label: string; summary: FileSumma
   )
 }
 
-export default function CompareFileSelectStep({ onNext, onBack }: Props): React.ReactElement {
+export default function CompareFileSelectStep({ onNext, onBack, onBedrockSaved }: Props): React.ReactElement {
   const [fileA, setFileA] = useState<FileSummary | null>(null)
   const [fileB, setFileB] = useState<FileSummary | null>(null)
   const [errorA, setErrorA] = useState('')
   const [errorB, setErrorB] = useState('')
+  const [bedrockArn, setBedrockArn] = useState('')
+
+  useEffect(() => {
+    window.api.getCredentials().then((creds) => {
+      if (creds.bedrock?.inferenceProfileArn) {
+        setBedrockArn(creds.bedrock.inferenceProfileArn)
+      }
+    })
+  }, [])
 
   const loadFileFromPath = async (side: 'a' | 'b', path: string): Promise<void> => {
     const setFile = side === 'a' ? setFileA : setFileB
@@ -144,6 +155,17 @@ export default function CompareFileSelectStep({ onNext, onBack }: Props): React.
         <Text size="2" color="gray" style={{ textAlign: 'center' }}>
           We'll show what B has that A doesn't, and vice versa.
         </Text>
+      )}
+
+      {!bedrockArn && (
+        <BedrockSetupBanner
+          mode="optional"
+          currentArn={bedrockArn}
+          onSaved={(creds) => {
+            setBedrockArn(creds.inferenceProfileArn)
+            onBedrockSaved?.(creds)
+          }}
+        />
       )}
 
       <Flex gap="3">

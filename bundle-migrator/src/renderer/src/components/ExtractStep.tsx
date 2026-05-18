@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, Flex, Heading, Text, Button, TextField, Checkbox } from '@radix-ui/themes'
 import { Virtuoso } from 'react-virtuoso'
-import type { BundleExport, ProgressEvent } from '../../../shared/types'
+import type { BundleListItem, BundleExport, ProgressEvent } from '../../../shared/types'
 
 const BASE_PROGRESS_EVENTS = 25
 const PROVISIONING_EXTRA_EVENTS = 2
@@ -15,26 +15,37 @@ interface LogEntry {
   message?: string
 }
 
+type BundleStatus = 'pending' | 'extracting' | 'done' | 'failed'
+
+interface BundleProgress {
+  name: string
+  status: BundleStatus
+  filePath?: string
+}
+
 interface Props {
-  bundleId: string
-  existingExport: BundleExport | null
-  onNext: (bundleExport: BundleExport) => void
+  bundles: BundleListItem[]
+  onNext: (exports: BundleExport[]) => void
   onBack: () => void
 }
 
-export default function ExtractStep({ bundleId, existingExport, onNext, onBack }: Props): React.ReactElement {
-  const alreadyDone = existingExport !== null
+export default function ExtractStep({ bundles, onNext, onBack }: Props): React.ReactElement {
+  const isMulti = bundles.length > 1
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [completed, setCompleted] = useState(alreadyDone ? BASE_PROGRESS_EVENTS : 0)
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [completed, setCompleted] = useState(0)
   const [currentObject, setCurrentObject] = useState('')
   const [error, setError] = useState('')
-  const [done, setDone] = useState(alreadyDone)
+  const [done, setDone] = useState(false)
   const [totalRecords, setTotalRecords] = useState(0)
   const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR)
   const [includeProvisioning, setIncludeProvisioning] = useState(false)
-  const [extracting, setExtracting] = useState(alreadyDone)
-  const exportRef = useRef<BundleExport | null>(existingExport)
-  const startedRef = useRef(alreadyDone)
+  const [extracting, setExtracting] = useState(false)
+  const [perBundleStatus, setPerBundleStatus] = useState<BundleProgress[]>(
+    bundles.map((b) => ({ name: b.name, status: 'pending' }))
+  )
+  const extractedRef = useRef<BundleExport[]>([])
+  const startedRef = useRef(false)
 
   const handleProgress = useCallback((event: ProgressEvent) => {
     if (event.stage !== 'extract') return
@@ -60,29 +71,71 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
     }
   }, [handleProgress])
 
-  const expectedEvents = includeProvisioning
-    ? BASE_PROGRESS_EVENTS + PROVISIONING_EXTRA_EVENTS
-    : BASE_PROGRESS_EVENTS
+  const expectedEvents = bundles.length * (
+    includeProvisioning ? BASE_PROGRESS_EVENTS + PROVISIONING_EXTRA_EVENTS : BASE_PROGRESS_EVENTS
+  )
 
-  const startExtraction = useCallback(() => {
+  const updateBundleStatus = (index: number, status: BundleStatus, filePath?: string): void => {
+    setPerBundleStatus((prev) => {
+      const next = [...prev]
+      next[index] = { ...next[index], status, filePath }
+      return next
+    })
+  }
+
+  const startExtraction = useCallback(async () => {
     if (startedRef.current) return
     startedRef.current = true
     setExtracting(true)
     setError('')
+
     const dir = outputDir === DEFAULT_OUTPUT_DIR ? undefined : outputDir
-    window.api
-      .extractBundle({ bundleId, outputDirectory: dir, includeProvisioningData: includeProvisioning })
-      .then((result) => {
-        exportRef.current = result
-        setCompleted(expectedEvents)
-        setDone(true)
-      })
-      .catch((err) => {
-        setExtracting(false)
-        startedRef.current = false
-        setError(err instanceof Error ? err.message : String(err))
-      })
-  }, [bundleId, outputDir, includeProvisioning, expectedEvents])
+    const results: BundleExport[] = []
+
+    for (let i = 0; i < bundles.length; i++) {
+      setCurrentIndex(i)
+      updateBundleStatus(i, 'extracting')
+
+      if (isMulti) {
+        setLogs((prev) => [...prev, {
+          timestamp: new Date().toLocaleTimeString(),
+          object: `── ${i + 1}/${bundles.length}: ${bundles[i].name} ──`,
+          count: 0,
+          status: 'success'
+        }])
+      }
+
+      try {
+        const result = await window.api.extractBundle({
+          bundleId: bundles[i].id,
+          outputDirectory: dir,
+          includeProvisioningData: includeProvisioning
+        })
+        results.push(result)
+        updateBundleStatus(i, 'done', result.exportFilePath)
+      } catch (err) {
+        updateBundleStatus(i, 'failed')
+        const msg = err instanceof Error ? err.message : String(err)
+        setLogs((prev) => [...prev, {
+          timestamp: new Date().toLocaleTimeString(),
+          object: bundles[i].name,
+          count: 0,
+          status: 'error',
+          message: msg
+        }])
+        if (!isMulti) {
+          setExtracting(false)
+          startedRef.current = false
+          setError(msg)
+          return
+        }
+      }
+    }
+
+    extractedRef.current = results
+    setCompleted(expectedEvents)
+    setDone(true)
+  }, [bundles, outputDir, includeProvisioning, expectedEvents, isMulti])
 
   const browseDirectory = async (): Promise<void> => {
     const dir = await window.api.selectDirectory()
@@ -91,10 +144,14 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
 
   const progress = Math.min(100, Math.round((completed / expectedEvents) * 100))
   const hasErrors = logs.some((l) => l.status === 'error')
+  const successCount = perBundleStatus.filter((s) => s.status === 'done').length
+  const failCount = perBundleStatus.filter((s) => s.status === 'failed').length
 
   return (
     <Flex direction="column" gap="4">
-      <Heading size="5">Extracting Bundle</Heading>
+      <Heading size="5">
+        {isMulti ? `Extracting ${bundles.length} Bundles` : 'Extracting Bundle'}
+      </Heading>
 
       {/* Save location */}
       <Flex gap="2" align="end">
@@ -136,13 +193,43 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
         </label>
       </Box>
 
+      {/* Multi-bundle status list */}
+      {isMulti && extracting && (
+        <Box p="3" style={{ border: '1px solid var(--gray-4)', borderRadius: 'var(--radius-2)' }}>
+          <Flex direction="column" gap="1">
+            {perBundleStatus.map((item, i) => (
+              <Text key={i} size="2" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                {item.status === 'pending' && '○ '}
+                {item.status === 'extracting' && '⟳ '}
+                {item.status === 'done' && '✓ '}
+                {item.status === 'failed' && '✗ '}
+                <span style={{
+                  fontWeight: item.status === 'extracting' ? 600 : 400,
+                  color: item.status === 'failed' ? 'var(--red-11)' : item.status === 'done' ? 'var(--green-11)' : undefined
+                }}>
+                  {item.name}
+                </span>
+                {item.status === 'extracting' && ' (extracting...)'}
+                {item.status === 'failed' && ' (failed)'}
+              </Text>
+            ))}
+          </Flex>
+        </Box>
+      )}
+
       {/* Progress bar */}
       <Box>
         <Flex justify="between" mb="1">
           <Text size="2" weight="medium">
-            {done ? 'Extraction complete' : `Extracting ${currentObject}...`}
+            {done
+              ? isMulti ? `Extraction complete — ${successCount} of ${bundles.length} succeeded` : 'Extraction complete'
+              : extracting
+                ? isMulti
+                  ? `Extracting ${currentIndex + 1}/${bundles.length}: ${currentObject}`
+                  : `Extracting ${currentObject}...`
+                : 'Ready to extract'}
           </Text>
-          <Text size="2" color="gray">{progress}%</Text>
+          <Text size="2" color="gray">{extracting || done ? `${progress}%` : ''}</Text>
         </Flex>
         <Box style={{ height: 8, background: 'var(--gray-4)', borderRadius: 4, overflow: 'hidden' }}>
           <Box
@@ -192,9 +279,19 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
 
       {done && (
         <Box p="3" style={{ background: 'var(--green-3)', borderRadius: 'var(--radius-2)' }}>
-          <Text color="green" size="2" weight="medium">
-            Extraction complete — {totalRecords.toLocaleString()} total records
-          </Text>
+          <Flex align="center" justify="between">
+            <Text color="green" size="2" weight="medium">
+              {isMulti
+                ? `${successCount} template${successCount !== 1 ? 's' : ''} extracted — ${totalRecords.toLocaleString()} total records`
+                : `Extraction complete — ${totalRecords.toLocaleString()} total records`}
+              {failCount > 0 && ` (${failCount} failed)`}
+            </Text>
+            {outputDir !== DEFAULT_OUTPUT_DIR && (
+              <Button variant="ghost" size="1" onClick={() => window.api.openFolder(outputDir)}>
+                Show in Finder
+              </Button>
+            )}
+          </Flex>
         </Box>
       )}
 
@@ -203,12 +300,12 @@ export default function ExtractStep({ bundleId, existingExport, onNext, onBack }
           &larr; Back
         </Button>
         {error && !done && (
-          <Button variant="soft" color="red" onClick={startExtraction}>
+          <Button variant="soft" color="red" onClick={() => { startedRef.current = false; startExtraction() }}>
             Retry
           </Button>
         )}
-        {done && exportRef.current && (
-          <Button onClick={() => onNext(exportRef.current!)}>
+        {done && extractedRef.current.length > 0 && (
+          <Button onClick={() => onNext(extractedRef.current)}>
             Next &rarr;
           </Button>
         )}

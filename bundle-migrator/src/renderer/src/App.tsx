@@ -15,7 +15,7 @@ import PDIResultsStep from './components/PDIResultsStep'
 import ImportStep from './components/ImportStep'
 import SummaryStep from './components/SummaryStep'
 import { EMPTY_CREDS } from './components/OrgConnectStep'
-import type { AppMode, OrgStatus, OrgCredentials, AllCredentials, BundleListItem, BundleExport, ImportSummary, PDIAnalysisResult, JiraTicketContext, BedrockCredentials } from '../../shared/types'
+import type { AppMode, OrgStatus, OrgCredentials, AllCredentials, BundleListItem, BundleExport, ImportSummary, PDIAnalysisResult, BedrockCredentials } from '../../shared/types'
 
 function getBedrockErrorMessage(err: string): string {
   if (err.includes('BEDROCK_NOT_CONFIGURED'))
@@ -87,7 +87,8 @@ export default function App(): React.ReactElement {
   const [sourceCreds, setSourceCreds] = useState<OrgCredentials>({ ...EMPTY_CREDS })
   const [targetCreds, setTargetCreds] = useState<OrgCredentials>({ ...EMPTY_CREDS })
   const [credsLoaded, setCredsLoaded] = useState(false)
-  const [selectedBundle, setSelectedBundle] = useState<BundleListItem | null>(null)
+  const [selectedBundles, setSelectedBundles] = useState<BundleListItem[]>([])
+  const [extractedBundles, setExtractedBundles] = useState<BundleExport[]>([])
   const [bundleExport, setBundleExport] = useState<BundleExport | null>(null)
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null)
   const [loadedFilePath, setLoadedFilePath] = useState<string | undefined>(undefined)
@@ -96,7 +97,7 @@ export default function App(): React.ReactElement {
   const [compareResultLabel, setCompareResultLabel] = useState('')
   const [pdiResult, setPdiResult] = useState<PDIAnalysisResult | null>(null)
   const [pdiDescription, setPdiDescription] = useState('')
-  const [pdiJiraTicket, setPdiJiraTicket] = useState<JiraTicketContext | null>(null)
+  const [pdiJiraUrl, setPdiJiraUrl] = useState('')
   const [pdiAnalyzing, setPdiAnalyzing] = useState(false)
   const [pdiError, setPdiError] = useState('')
   const [bedrockCreds, setBedrockCreds] = useState<BedrockCredentials | undefined>(undefined)
@@ -117,7 +118,8 @@ export default function App(): React.ReactElement {
 
   const resetAll = (): void => {
     setMode(null)
-    setSelectedBundle(null)
+    setSelectedBundles([])
+    setExtractedBundles([])
     setBundleExport(null)
     setImportSummary(null)
     setLoadedFilePath(undefined)
@@ -126,7 +128,7 @@ export default function App(): React.ReactElement {
     setCompareResultLabel('')
     setPdiResult(null)
     setPdiDescription('')
-    setPdiJiraTicket(null)
+    setPdiJiraUrl('')
     setPdiError('')
     setStep('mode')
   }
@@ -219,20 +221,22 @@ export default function App(): React.ReactElement {
 
           {step === 'search' && (
             <BundleSearchStep
-              onNext={(bundle) => {
-                setSelectedBundle(bundle)
+              onNext={(bundles) => {
+                setSelectedBundles(bundles)
                 setStep('extract')
               }}
               onBack={() => setStep('connect')}
             />
           )}
 
-          {step === 'extract' && selectedBundle && (
+          {step === 'extract' && selectedBundles.length > 0 && (
             <ExtractStep
-              bundleId={selectedBundle.id}
-              existingExport={bundleExport}
-              onNext={(result) => {
-                setBundleExport(result)
+              bundles={selectedBundles}
+              onNext={(exports) => {
+                setExtractedBundles(exports)
+                const first = exports[0] ?? null
+                setBundleExport(first)
+                setLoadedFilePath(first?.exportFilePath)
                 setStep('review')
               }}
               onBack={() => setStep('search')}
@@ -263,7 +267,13 @@ export default function App(): React.ReactElement {
 
           {step === 'review' && bundleExport && mode && (
             <ReviewStep
+              key={bundleExport.bundleId}
               bundleExport={bundleExport}
+              allExtractedBundles={extractedBundles.length > 1 ? extractedBundles : undefined}
+              onSelectBundle={(selected) => {
+                setBundleExport(selected)
+                setLoadedFilePath(selected.exportFilePath)
+              }}
               mode={mode}
               onNext={() => {
                 if (mode === 'extract-upsert') {
@@ -289,7 +299,7 @@ export default function App(): React.ReactElement {
 
           {step === 'import' && bundleExport && (
             <ImportStep
-              exportFilePath={bundleExport.exportFilePath}
+              exportFilePath={loadedFilePath ?? bundleExport.exportFilePath}
               onNext={(summary) => {
                 setImportSummary(summary)
                 setStep('summary')
@@ -302,7 +312,7 @@ export default function App(): React.ReactElement {
             <SummaryStep
               summary={importSummary}
               mode={mode}
-              exportFilePath={bundleExport?.exportFilePath}
+              exportFilePath={loadedFilePath ?? bundleExport?.exportFilePath}
               bundleExport={bundleExport ?? undefined}
               hasProvisioningData={!!bundleExport?.provisioningData}
               onStartOver={resetAll}
@@ -318,6 +328,7 @@ export default function App(): React.ReactElement {
                 setStep('compareResults')
               }}
               onBack={() => setStep('mode')}
+              onBedrockSaved={(creds) => setBedrockCreds(creds)}
             />
           )}
 
@@ -335,9 +346,10 @@ export default function App(): React.ReactElement {
 
           {step === 'pdiInsight' && (
             <PDIInsightStep
-              onAnalyze={async (bundle, description, affectedArea, errorMsg, jiraTicket) => {
+              onBedrockSaved={(creds) => setBedrockCreds(creds)}
+              onAnalyze={async (bundle, description, affectedArea, errorMsg, jiraUrl) => {
                 setPdiDescription(description)
-                setPdiJiraTicket(jiraTicket)
+                setPdiJiraUrl(jiraUrl)
                 setPdiAnalyzing(true)
                 setPdiError('')
                 setPdiResult(null)
@@ -348,7 +360,7 @@ export default function App(): React.ReactElement {
                     pdiDescription: description,
                     affectedArea,
                     errorMessage: errorMsg,
-                    jiraTicket: jiraTicket ?? undefined
+                    jiraUrl: jiraUrl || undefined
                   })
                   setPdiResult(result)
                 } catch (err) {
@@ -393,10 +405,10 @@ export default function App(): React.ReactElement {
               <PDIResultsStep
                 result={pdiResult}
                 pdiDescription={pdiDescription}
-                jiraTicket={pdiJiraTicket}
+                jiraUrl={pdiJiraUrl}
                 onAnalyzeAnother={() => {
                   setPdiResult(null)
-                  setPdiJiraTicket(null)
+                  setPdiJiraUrl('')
                   setPdiError('')
                   setStep('pdiInsight')
                 }}

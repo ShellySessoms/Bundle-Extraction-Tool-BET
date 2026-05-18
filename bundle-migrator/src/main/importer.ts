@@ -4,13 +4,16 @@ import type { Field } from '@jsforce/jsforce-node/lib/types/common'
 import log from 'electron-log/main'
 import { readFileSync } from 'fs'
 import { resolveReferences } from './referenceResolver'
+import { deployMissingCustomFields } from './metadataDeploy'
 import type {
   SfRecord,
   BundleExport,
   ProgressEvent,
   ImportSummary,
   FailedRecord,
-  ResolvedReferences
+  ResolvedReferences,
+  CustomFieldDef,
+  ProvisioningMetadata
 } from '../shared/types'
 
 type UpdatePayload = { Id: string; [key: string]: unknown }
@@ -75,7 +78,7 @@ async function resolveIdByLookupKey(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>()
   if (lookupKeys.length === 0) return map
-  for (const keyChunk of chunk(lookupKeys, 500)) {
+  for (const keyChunk of chunk(lookupKeys, 100)) {
     const inClause = keyChunk.map((k) => `'${k.replace(/'/g, "\\'")}'`).join(',')
     const rows = await queryAll<SfRecord>(
       conn,
@@ -531,6 +534,74 @@ export async function importBundle(
     return { succeeded: result.succeeded, failed: result.failed.length }
   }
 
+  // ─── Pre-flight: Deploy missing custom fields ─────────────────────────
+
+  if (bundle.provisioningData) {
+    const customFields = [
+      ...(bundle.provisioningData.customScheduleEntryFields ?? []),
+      ...(bundle.provisioningData.customDebtFields ?? [])
+    ]
+
+    if (customFields.length > 0) {
+      emitProgress({
+        stage: 'import',
+        object: 'Schema Pre-flight',
+        status: 'success',
+        message: `Checking ${customFields.length} custom field(s) in target org...`
+      })
+
+      try {
+        const deployResult = await deployMissingCustomFields(
+          conn,
+          customFields,
+          (msg) => logInfo(msg)
+        )
+
+        if (deployResult.deployed.length > 0) {
+          emitProgress({
+            stage: 'import',
+            object: 'Schema Deploy',
+            count: deployResult.deployed.length,
+            status: 'success',
+            message: `Deployed ${deployResult.deployed.length} custom field(s): ${deployResult.deployed.join(', ')}`
+          })
+        }
+
+        if (deployResult.skipped.length > 0 && deployResult.deployed.length === 0) {
+          emitProgress({
+            stage: 'import',
+            object: 'Schema Deploy',
+            count: deployResult.skipped.length,
+            status: 'success',
+            message: `All ${deployResult.skipped.length} custom field(s) already exist in target org`
+          })
+        }
+
+        if (deployResult.failed.length > 0) {
+          emitProgress({
+            stage: 'import',
+            object: 'Schema Deploy',
+            count: deployResult.failed.length,
+            status: 'partial',
+            message: `${deployResult.failed.length} custom field(s) failed to deploy: ${deployResult.failed.map((f) => f.fieldName).join(', ')}`
+          })
+        }
+
+        summary.schemaDeployResult = deployResult
+      } catch (err) {
+        logWarn(`Schema pre-flight failed — continuing with upsert: ${err instanceof Error ? err.message : String(err)}`)
+        emitProgress({
+          stage: 'import',
+          object: 'Schema Deploy',
+          status: 'error',
+          message: `Schema check failed — continuing: ${err instanceof Error ? err.message : String(err)}`
+        })
+      }
+    }
+  } else {
+    logInfo('No provisioning data — custom field check skipped')
+  }
+
   // ─── Step 0: Resolve reference data & upsert Classifications ──────────
 
   logInfo('Step 0 — Resolving reference data & upserting Classifications')
@@ -777,8 +848,11 @@ export async function importBundle(
 
   logInfo('Step 21 — Upserting Schedule Sections (Schedule-owned)')
   const allSections = bundle.records['LLC_BI__Schedule_Section__c'] ?? []
-  const scheduleOwnedSections = allSections.filter((r) => !!r.LLC_BI__Schedule__c)
-  const debtOwnedSections = allSections.filter((r) => !!r.LLC_BI__Debt_Schedule__c)
+
+  const validatedSections = await provisionAndValidateScheduleSectionFields(conn, allSections, bundle.provisioningData, emitProgress)
+
+  const scheduleOwnedSections = validatedSections.filter((r) => !!r.LLC_BI__Schedule__c)
+  const debtOwnedSections = validatedSections.filter((r) => !!r.LLC_BI__Debt_Schedule__c)
 
   for (const rec of scheduleOwnedSections) {
     rec.LLC_BI__Source_Section__c = null
@@ -969,6 +1043,357 @@ async function upsertScheduleSections(
     updated: result.updated,
     status: result.failed.length > 0 ? 'partial' : 'success'
   })
+}
+
+// ─── Custom field provisioning for schedule sections ────────────────────────
+
+const SFDC_TYPE_MAP: Record<string, { type: string; length?: number; precision?: number; scale?: number; visibleLines?: number }> = {
+  string:   { type: 'Text', length: 255 },
+  currency: { type: 'Currency', precision: 18, scale: 2 },
+  double:   { type: 'Number', precision: 18, scale: 4 },
+  percent:  { type: 'Percent', precision: 18, scale: 4 },
+  boolean:  { type: 'Checkbox' },
+  date:     { type: 'Date' },
+  datetime: { type: 'DateTime' },
+  textarea: { type: 'LongTextArea', length: 32768, visibleLines: 3 }
+}
+
+function buildFieldPayload(
+  objectApiName: string,
+  def: CustomFieldDef
+): Record<string, unknown> {
+  const mapping = SFDC_TYPE_MAP[def.dataType] ?? SFDC_TYPE_MAP['string']
+  const payload: Record<string, unknown> = {
+    fullName: `${objectApiName}.${def.fieldApiName}`,
+    label: def.label || def.fieldApiName.replace(/__c$/, '').replace(/_/g, ' '),
+    type: mapping.type
+  }
+  if (mapping.length !== undefined) payload.length = mapping.length
+  if (mapping.precision !== undefined) payload.precision = mapping.precision
+  if (mapping.scale !== undefined) payload.scale = mapping.scale
+  if (mapping.visibleLines !== undefined) payload.visibleLines = mapping.visibleLines
+  if (mapping.type === 'Checkbox') payload.defaultValue = false
+  return payload
+}
+
+interface FieldCreateResult {
+  created: Set<string>
+  remaps: Map<string, string>
+}
+
+async function createCustomFields(
+  conn: Connection,
+  objectApiName: string,
+  fieldDefs: CustomFieldDef[],
+  emitProgress: (e: ProgressEvent) => void
+): Promise<FieldCreateResult> {
+  const created = new Set<string>()
+  const remaps = new Map<string, string>()
+  if (fieldDefs.length === 0) return { created, remaps }
+
+  const metadataPayloads = fieldDefs.map((def) => buildFieldPayload(objectApiName, def))
+
+  const batches = chunk(metadataPayloads, 10)
+  const labelCollisions: string[] = []
+  for (const batch of batches) {
+    try {
+      const results = await conn.metadata.create('CustomField', batch as never)
+      const resultsArray = Array.isArray(results) ? results : [results]
+      for (let i = 0; i < resultsArray.length; i++) {
+        const r = resultsArray[i]
+        const fieldName = batch[i].fullName as string
+        const shortName = fieldName.split('.')[1]
+        if (r.success) {
+          created.add(shortName)
+          logInfo(`Created custom field: ${fieldName}`)
+        } else {
+          const errMsg = r.errors?.map((e: { message: string }) => e.message).join('; ') ?? 'Unknown error'
+          if (errMsg.includes('Duplicate') || errMsg.includes('already exists')) {
+            created.add(shortName)
+            logInfo(`Custom field already exists: ${fieldName}`)
+          } else if (errMsg.includes('already a field named')) {
+            labelCollisions.push(shortName)
+            logInfo(`Label collision for ${fieldName} — will search for managed equivalent`)
+          } else {
+            logWarn(`Failed to create ${fieldName}: ${errMsg}`)
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logWarn(`Metadata API batch error for ${objectApiName}: ${msg}`)
+    }
+  }
+
+  if (labelCollisions.length > 0) {
+    const KNOWN_PREFIXES = ['nCRED__', 'nFORCE__', 'nDESIGN__']
+    const candidates = labelCollisions.flatMap((f) => KNOWN_PREFIXES.map((p) => `${p}${f}`))
+    const inClause = candidates.map((c) => `'${objectApiName}.${c}'`).join(',')
+    try {
+      const rows = await conn.query<{ QualifiedApiName: string; DeveloperName: string }>(
+        `SELECT QualifiedApiName, DeveloperName FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${objectApiName}' AND QualifiedApiName IN (${inClause})`
+      )
+      const foundFields = new Set(rows.records.map((r) => r.QualifiedApiName))
+      for (const shortName of labelCollisions) {
+        let resolved = false
+        for (const prefix of KNOWN_PREFIXES) {
+          const candidate = `${prefix}${shortName}`
+          if (foundFields.has(candidate)) {
+            remaps.set(shortName, candidate)
+            logInfo(`Resolved label collision: ${shortName} → ${candidate} (managed field found via FieldDefinition)`)
+            resolved = true
+            break
+          }
+        }
+        if (!resolved) {
+          logWarn(`Could not resolve managed equivalent for ${shortName} on ${objectApiName}`)
+        }
+      }
+      if (remaps.size > 0) {
+        await setFieldLevelSecurity(conn, objectApiName, new Set(remaps.values()))
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logWarn(`FieldDefinition query failed for label collision resolution: ${msg}`)
+    }
+  }
+
+  const allResolved = new Set([...created, ...remaps.keys()])
+  if (allResolved.size > 0) {
+    await setFieldLevelSecurity(conn, objectApiName, created)
+
+    emitProgress({
+      stage: 'import',
+      object: `${objectApiName} (custom fields)`,
+      total: fieldDefs.length,
+      succeeded: allResolved.size,
+      failed: fieldDefs.length - allResolved.size,
+      status: allResolved.size === fieldDefs.length ? 'success' : 'partial',
+      message: `Resolved ${allResolved.size}/${fieldDefs.length} custom field(s) on ${objectApiName}` +
+        (remaps.size > 0 ? ` (${remaps.size} remapped to managed)` : '')
+    })
+  }
+
+  return { created, remaps }
+}
+
+async function setFieldLevelSecurity(
+  conn: Connection,
+  objectApiName: string,
+  fieldNames: Set<string>
+): Promise<void> {
+  if (fieldNames.size === 0) return
+
+  const fieldPermissions = [...fieldNames].map((f) => ({
+    field: `${objectApiName}.${f}`,
+    editable: true,
+    readable: true
+  }))
+
+  const profileNames = ['Admin', 'System Administrator']
+  for (const profileName of profileNames) {
+    try {
+      const result = await conn.metadata.update('Profile', {
+        fullName: profileName,
+        fieldPermissions
+      } as never)
+      const r = Array.isArray(result) ? result[0] : result
+      if (r.success) {
+        logInfo(`FLS set for ${fieldNames.size} field(s) on profile "${profileName}"`)
+        return
+      }
+      const errMsg = r.errors?.map((e: { message: string }) => e.message).join('; ') ?? 'Unknown error'
+      logWarn(`FLS update failed for profile "${profileName}": ${errMsg}`)
+    } catch (err) {
+      logWarn(`FLS update error for profile "${profileName}": ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  try {
+    const identity = await conn.identity()
+    const profileId = (identity as Record<string, unknown>).profile_id as string | undefined
+    if (profileId) {
+      const profileQuery = await conn.query<SfRecord>(
+        `SELECT Name FROM Profile WHERE Id = '${profileId}' LIMIT 1`
+      )
+      const profileName = profileQuery.records[0]?.Name as string | undefined
+      if (profileName && !profileNames.includes(profileName)) {
+        logInfo(`Attempting FLS on user's profile: "${profileName}"`)
+        const result = await conn.metadata.update('Profile', {
+          fullName: profileName,
+          fieldPermissions
+        } as never)
+        const r = Array.isArray(result) ? result[0] : result
+        if (r.success) {
+          logInfo(`FLS set for ${fieldNames.size} field(s) on profile "${profileName}"`)
+          return
+        }
+      }
+    }
+  } catch (err) {
+    logWarn(`FLS fallback error: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  logWarn('Could not set FLS on any profile — fields may not be visible. Grant access via Setup > Profiles.')
+}
+
+async function provisionAndValidateScheduleSectionFields(
+  conn: Connection,
+  sections: SfRecord[],
+  provisioningData: ProvisioningMetadata | undefined,
+  emitProgress: (e: ProgressEvent) => void
+): Promise<SfRecord[]> {
+  if (sections.length === 0) return sections
+
+  const scheduleOwned = sections.filter((r) => !!r.LLC_BI__Schedule__c)
+  const debtOwned = sections.filter((r) => !!r.LLC_BI__Debt_Schedule__c)
+
+  const validatedSchedule = await remapAndProvisionFields(
+    conn, scheduleOwned, 'LLC_BI__Schedule_Entry__c',
+    provisioningData?.customScheduleEntryFields ?? [],
+    emitProgress
+  )
+  const validatedDebt = await remapAndProvisionFields(
+    conn, debtOwned, 'LLC_BI__Debt__c',
+    provisioningData?.customDebtFields ?? [],
+    emitProgress
+  )
+
+  return [...validatedSchedule, ...validatedDebt]
+}
+
+async function remapAndProvisionFields(
+  conn: Connection,
+  sections: SfRecord[],
+  targetObjectApiName: string,
+  fieldDefs: CustomFieldDef[],
+  emitProgress: (e: ProgressEvent) => void
+): Promise<SfRecord[]> {
+  if (sections.length === 0) return sections
+
+  const referenced = new Set<string>()
+  for (const sec of sections) {
+    const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
+    if (entry && !entry.startsWith('LLC_BI__')) referenced.add(entry)
+  }
+  if (referenced.size === 0) return sections
+
+  const objDesc = await conn.describe(targetObjectApiName)
+  const targetFieldsByName = new Set(objDesc.fields.map((f: Field) => f.name))
+
+  const KNOWN_PREFIXES = ['nCRED__', 'nFORCE__', 'nDESIGN__', 'LLC_BI__']
+  const stemToManagedField = new Map<string, string>()
+  for (const f of objDesc.fields) {
+    if (!f.custom) continue
+    for (const prefix of KNOWN_PREFIXES) {
+      if (f.name.startsWith(prefix)) {
+        const stem = f.name.slice(prefix.length)
+        stemToManagedField.set(stem, f.name)
+        break
+      }
+    }
+  }
+
+  const missing = new Set<string>()
+  const remapEntries = new Map<string, string>()
+
+  for (const field of referenced) {
+    const managedMatch = stemToManagedField.get(field)
+    if (managedMatch) {
+      remapEntries.set(field, managedMatch)
+      logInfo(`Remapping field on ${targetObjectApiName}: ${field} → ${managedMatch} (matched by API name stem)`)
+    } else if (!targetFieldsByName.has(field)) {
+      missing.add(field)
+    }
+  }
+
+  if (remapEntries.size > 0) {
+    for (const sec of sections) {
+      const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
+      if (entry && remapEntries.has(entry)) {
+        sec.LLC_BI__Schedule_Entry__c = remapEntries.get(entry)!
+      }
+    }
+    emitProgress({
+      stage: 'import',
+      object: `${targetObjectApiName} (field remap)`,
+      total: remapEntries.size,
+      succeeded: remapEntries.size,
+      status: 'success',
+      message: `Remapped ${remapEntries.size} field(s) to managed equivalents: ${[...remapEntries.entries()].map(([from, to]) => `${from}→${to}`).join(', ')}`
+    })
+  }
+
+  if (missing.size === 0) {
+    logInfo(`${targetObjectApiName} field validation: all fields resolved (${referenced.size - remapEntries.size} exist, ${remapEntries.size} remapped)`)
+    return sections
+  }
+
+  logInfo(`${missing.size} custom field(s) missing on target ${targetObjectApiName} (after remap)`)
+
+  if (fieldDefs.length > 0) {
+    const defMap = new Map<string, CustomFieldDef>()
+    for (const d of fieldDefs) defMap.set(d.fieldApiName, d)
+
+    const toCreate: CustomFieldDef[] = []
+    for (const field of missing) {
+      const def = defMap.get(field)
+      if (def) {
+        toCreate.push({ ...def, objectApiName: targetObjectApiName })
+      } else {
+        logWarn(`No provisioning definition for custom field: ${field} on ${targetObjectApiName}`)
+      }
+    }
+
+    if (toCreate.length > 0) {
+      logInfo(`Creating ${toCreate.length} custom field(s) on ${targetObjectApiName}`)
+      const result = await createCustomFields(conn, targetObjectApiName, toCreate, emitProgress)
+      for (const f of result.created) missing.delete(f)
+      if (result.remaps.size > 0) {
+        for (const [from, to] of result.remaps) {
+          remapEntries.set(from, to)
+          missing.delete(from)
+        }
+        for (const sec of sections) {
+          const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
+          if (entry && result.remaps.has(entry)) {
+            sec.LLC_BI__Schedule_Entry__c = result.remaps.get(entry)!
+          }
+        }
+        logInfo(`Late-remapped ${result.remaps.size} field(s) to managed equivalents: ${[...result.remaps.entries()].map(([from, to]) => `${from}→${to}`).join(', ')}`)
+      }
+    }
+  } else {
+    logWarn(`No provisioning field definitions available for ${targetObjectApiName} — cannot auto-create custom fields`)
+  }
+
+  if (missing.size === 0) {
+    logInfo('All missing custom fields resolved — all sections will be upserted')
+    return sections
+  }
+
+  logWarn(`${missing.size} custom field(s) could not be created on ${targetObjectApiName} — removing affected sections`)
+  for (const f of missing) {
+    logWarn(`  Still missing: ${f}`)
+  }
+
+  const valid = sections.filter((sec) => {
+    const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
+    return !entry || !missing.has(entry)
+  })
+
+  const removed = sections.length - valid.length
+  emitProgress({
+    stage: 'import',
+    object: `${targetObjectApiName} (field validation)`,
+    total: sections.length,
+    succeeded: valid.length,
+    failed: removed,
+    status: 'partial',
+    message: `${removed} section(s) removed — ${missing.size} custom field(s) could not be created: ${[...missing].join(', ')}`
+  })
+
+  return valid
 }
 
 // ─── Backfill helpers ───────────────────────────────────────────────────────

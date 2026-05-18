@@ -1,11 +1,11 @@
 import React, { useState } from 'react'
 import { Box, Flex, Heading, Text, Button, Badge } from '@radix-ui/themes'
-import type { PDIAnalysisResult, JiraTicketContext } from '../../../shared/types'
+import type { PDIAnalysisResult } from '../../../shared/types'
 
 interface Props {
   result: PDIAnalysisResult
   pdiDescription: string
-  jiraTicket: JiraTicketContext | null
+  jiraUrl: string
   onAnalyzeAnother: () => void
   onStartOver: () => void
 }
@@ -33,7 +33,7 @@ function VerdictBadge({ verdict }: { verdict: Verdict }): React.ReactElement {
 export default function PDIResultsStep({
   result,
   pdiDescription,
-  jiraTicket,
+  jiraUrl,
   onAnalyzeAnother,
   onStartOver
 }: Props): React.ReactElement {
@@ -47,7 +47,7 @@ export default function PDIResultsStep({
       const path = await window.api.exportPDIAnalysis(
         result,
         pdiDescription,
-        jiraTicket ?? undefined
+        jiraUrl || undefined
       )
       setExportPath(path)
       setExportError('')
@@ -78,11 +78,10 @@ export default function PDIResultsStep({
         </Text>
       </Box>
 
-      {jiraTicket && (
+      {jiraUrl && (
         <Flex align="center" gap="2">
-          <Text size="2" weight="bold" color="blue">{jiraTicket.key}</Text>
-          <Text size="2">{jiraTicket.summary}</Text>
-          <Text size="1" color="gray">({jiraTicket.status})</Text>
+          <Text size="2" weight="bold" color="blue">Jira:</Text>
+          <Text size="2">{jiraUrl}</Text>
         </Flex>
       )}
 

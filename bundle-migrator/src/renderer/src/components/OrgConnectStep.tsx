@@ -9,7 +9,7 @@ const EMPTY_CREDS: OrgCredentials = {
   username: '',
   password: '',
   token: '',
-  loginUrl: 'https://login.salesforce.com',
+  loginUrl: 'https://test.salesforce.com',
   accessToken: '',
   instanceUrl: ''
 }
@@ -87,7 +87,7 @@ function OrgPanel({
   onChange: (c: OrgCredentials) => void
   status: ConnectionStatus
   orgInfo: OrgStatus | null
-  onConnect?: () => void
+  onConnect?: (resolvedCreds: OrgCredentials) => void
   errorMessage?: string
   optional?: boolean
 }): React.ReactElement {
@@ -109,6 +109,14 @@ function OrgPanel({
   const canConnect = authMethod === 'session'
     ? !!(creds.accessToken && creds.instanceUrl)
     : !!creds.username
+
+  const handleConnect = (): void => {
+    if (!onConnect) return
+    const resolved: OrgCredentials = authMethod === 'credentials'
+      ? { ...creds, accessToken: '', instanceUrl: '' }
+      : { ...creds, username: '', password: '', token: '' }
+    onConnect(resolved)
+  }
 
   return (
     <Box flexGrow="1" p="4" style={{ border: '1px solid var(--gray-6)', borderRadius: 'var(--radius-3)' }}>
@@ -148,12 +156,6 @@ function OrgPanel({
               isSecret
             />
             <CredentialField
-              label="Security Token"
-              value={creds.token}
-              onChange={(v) => onChange({ ...creds, token: v })}
-              isSecret
-            />
-            <CredentialField
               label="Login URL"
               value={creds.loginUrl}
               onChange={(v) => onChange({ ...creds, loginUrl: v })}
@@ -186,7 +188,7 @@ function OrgPanel({
         {onConnect && (
           <Button
             size="2"
-            onClick={onConnect}
+            onClick={handleConnect}
             disabled={status === 'connecting' || !canConnect}
           >
             {status === 'connecting' ? 'Connecting...' : 'Connect'}
@@ -281,11 +283,12 @@ export default function OrgConnectStep({
     }
   }
 
-  const connectSourceOrg = async (): Promise<void> => {
+  const connectSourceOrg = async (resolvedCreds: OrgCredentials): Promise<void> => {
     setSourceConnStatus('connecting')
     setSourceError('')
+    setSourceCreds(resolvedCreds)
     try {
-      const result = await window.api.connectSource(sourceCreds)
+      const result = await window.api.connectSource(resolvedCreds)
       if (result.connected) {
         onSourceConnected(result)
         setSourceConnStatus('connected')
@@ -299,11 +302,12 @@ export default function OrgConnectStep({
     }
   }
 
-  const connectTargetOrg = async (): Promise<void> => {
+  const connectTargetOrg = async (resolvedCreds: OrgCredentials): Promise<void> => {
     setTargetConnStatus('connecting')
     setTargetError('')
+    setTargetCreds(resolvedCreds)
     try {
-      const result = await window.api.connectTarget(targetCreds)
+      const result = await window.api.connectTarget(resolvedCreds)
       if (result.connected) {
         onTargetConnected(result)
         setTargetConnStatus('connected')

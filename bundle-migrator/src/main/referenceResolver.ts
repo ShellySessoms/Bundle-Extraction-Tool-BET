@@ -88,7 +88,7 @@ export async function resolveReferences(
     const allNames = referenceData.classificationNames
     const foundNames = new Set<string>()
 
-    for (const nameChunk of chunk(allNames, 500)) {
+    for (const nameChunk of chunk(allNames, 50)) {
       const inClause = nameChunk.map((n) => `'${n.replace(/'/g, "\\'")}'`).join(',')
       const rows = await queryAll<SfRecord>(
         conn,
@@ -122,7 +122,7 @@ export async function resolveReferences(
     const allKeys = referenceData.projectionsTemplateLookupKeys
     const foundKeys = new Set<string>()
 
-    for (const keyChunk of chunk(allKeys, 500)) {
+    for (const keyChunk of chunk(allKeys, 100)) {
       const inClause = keyChunk.map((k) => `'${k.replace(/'/g, "\\'")}'`).join(',')
       const rows = await queryAll<SfRecord>(
         conn,

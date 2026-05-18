@@ -10,7 +10,7 @@ import {
 import type { BundleListItem, BundleSearchType } from '../../../shared/types'
 
 interface Props {
-  onNext: (bundle: BundleListItem) => void
+  onNext: (bundles: BundleListItem[]) => void
   onBack: () => void
 }
 
@@ -101,12 +101,12 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     setLoading(true)
     setError('')
-    setSelectedId(null)
+    setSelectedIds(new Set())
     window.api
       .searchBundles('', bundleType)
       .then(setBundles)
@@ -138,7 +138,17 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
     getFilteredRowModel: getFilteredRowModel()
   })
 
-  const selectedBundle = bundles.find((b) => b.id === selectedId)
+  const toggleSelection = (id: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
 
   const tabBtn = (label: string, value: BundleSearchType): React.ReactElement => (
     <Button
@@ -180,6 +190,29 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
         </Text>
       </Flex>
 
+      <Flex align="center" gap="3">
+        <Text size="2" color="gray">
+          {selectedIds.size === 0
+            ? 'No templates selected'
+            : `${selectedIds.size} template${selectedIds.size > 1 ? 's' : ''} selected`}
+        </Text>
+        {filtered.length > 0 && (
+          <Button
+            variant="ghost"
+            size="1"
+            onClick={() => {
+              if (selectedIds.size === filtered.length) {
+                setSelectedIds(new Set())
+              } else {
+                setSelectedIds(new Set(filtered.map((b) => b.id)))
+              }
+            }}
+          >
+            {selectedIds.size === filtered.length ? 'Deselect All' : 'Select All'}
+          </Button>
+        )}
+      </Flex>
+
       {loading ? (
         <Text size="2" color="gray">Loading...</Text>
       ) : (
@@ -188,6 +221,15 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
             <thead>
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
+                  <th style={{
+                    width: 36,
+                    padding: '8px 8px 8px 10px',
+                    borderBottom: '1px solid var(--gray-5)',
+                    background: 'var(--gray-2)',
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1
+                  }} />
                   {hg.headers.map((h) => (
                     <th
                       key={h.id}
@@ -209,16 +251,27 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
             </thead>
             <tbody>
               {table.getRowModel().rows.map((row) => {
-                const isSelected = row.original.id === selectedId
+                const isSelected = selectedIds.has(row.original.id)
                 return (
                   <tr
                     key={row.id}
-                    onClick={() => setSelectedId(row.original.id)}
+                    onClick={() => toggleSelection(row.original.id)}
                     style={{
                       cursor: 'pointer',
                       background: isSelected ? 'var(--blue-3)' : undefined
                     }}
                   >
+                    <td style={{ width: 36, padding: '6px 8px 6px 10px' }}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => {
+                          e.stopPropagation()
+                          toggleSelection(row.original.id)
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </td>
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
@@ -250,11 +303,14 @@ export default function BundleSearchStep({ onNext, onBack }: Props): React.React
         <Button variant="soft" onClick={onBack}>&larr; Back</Button>
         <Button
           onClick={() => {
-            if (selectedBundle) onNext(selectedBundle)
+            const selected = bundles.filter((b) => selectedIds.has(b.id))
+            onNext(selected)
           }}
-          disabled={!selectedBundle}
+          disabled={selectedIds.size === 0}
         >
-          Extract Selected Bundle &rarr;
+          {selectedIds.size > 1
+            ? `Extract ${selectedIds.size} Templates →`
+            : 'Extract Template →'}
         </Button>
       </Flex>
     </Flex>

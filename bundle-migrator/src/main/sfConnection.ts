@@ -114,6 +114,12 @@ export function getAllCredentials(): { source: SfCredentials; target: SfCredenti
 }
 
 async function connect(creds: SfCredentials): Promise<Connection> {
+  if (creds.username) {
+    const conn = new Connection({ loginUrl: creds.loginUrl })
+    await conn.login(creds.username, creds.password)
+    log.info(`Authenticated as ${creds.username} on ${creds.loginUrl}`)
+    return conn
+  }
   if (creds.accessToken && creds.instanceUrl) {
     const token = creds.accessToken.trim()
     const instance = creds.instanceUrl.trim().replace(/\/+$/, '')
@@ -122,16 +128,11 @@ async function connect(creds: SfCredentials): Promise<Connection> {
       accessToken: token,
       version: '62.0'
     })
-    // Validate the session with a lightweight REST call instead of identity(),
-    // which appends the token as a query param that some orgs reject.
     await conn.request({ method: 'GET', url: `${instance}/services/data/v62.0/limits` })
     log.info(`Authenticated via access token on ${instance}`)
     return conn
   }
-  const conn = new Connection({ loginUrl: creds.loginUrl })
-  await conn.login(creds.username, creds.password + creds.token)
-  log.info(`Authenticated as ${creds.username} on ${creds.loginUrl}`)
-  return conn
+  throw new Error('No credentials provided — supply either username/password or accessToken/instanceUrl')
 }
 
 let sourceConnection: Connection | null = null

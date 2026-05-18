@@ -13,8 +13,7 @@ import type {
   AllCredentials,
   ManifestPackage,
   PDIAnalysisRequest,
-  PDIAnalysisResult,
-  JiraTicketContext
+  PDIAnalysisResult
 } from '../../shared/types'
 
 interface ElectronAPI {
@@ -23,6 +22,7 @@ interface ElectronAPI {
   searchBundles: (search: string, bundleType?: BundleSearchType) => Promise<BundleListItem[]>
   extractBundle: (options: ExtractionOptions) => Promise<BundleExport>
   importBundle: (exportFilePath: string) => Promise<ImportSummary>
+  openExternal: (url: string) => Promise<void>
   openLogFile: () => Promise<void>
   openFile: (filePath: string) => Promise<void>
   openInFinder: (filePath: string) => Promise<void>
@@ -37,8 +37,7 @@ interface ElectronAPI {
   exportCompareCsv: (comparison: BundleComparison) => Promise<string>
   analyzeComparison: (comparison: BundleComparison) => Promise<string>
   analyzePDI: (request: PDIAnalysisRequest) => Promise<PDIAnalysisResult>
-  fetchJiraTicket: (jiraUrl: string) => Promise<JiraTicketContext>
-  exportPDIAnalysis: (result: PDIAnalysisResult, pdiDescription: string, jiraTicket?: JiraTicketContext) => Promise<string>
+  exportPDIAnalysis: (result: PDIAnalysisResult, pdiDescription: string, jiraUrl?: string) => Promise<string>
   generateManifest: (bundle: BundleExport, outputDir: string) => Promise<ManifestPackage>
   getCredentials: () => Promise<AllCredentials>
   saveCredentials: (creds: AllCredentials) => Promise<void>

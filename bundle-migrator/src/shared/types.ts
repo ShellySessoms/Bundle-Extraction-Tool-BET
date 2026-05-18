@@ -140,6 +140,25 @@ export interface CustomFieldDef {
   dataType: string
   isRequired: boolean
   usedByScheduleNames: string[]
+
+  formula?: string
+  formulaTreatBlanksAs?: string
+
+  referenceTo?: string
+  relationshipName?: string
+
+  picklistValues?: {
+    value: string
+    label: string
+    isDefault: boolean
+    isActive: boolean
+  }[]
+  isRestrictedPicklist?: boolean
+  globalValueSetName?: string
+
+  precision?: number
+  scale?: number
+  length?: number
 }
 
 export interface PermissionSetRequirement {
@@ -188,20 +207,6 @@ export interface BedrockCredentials {
   awsSessionToken?: string
 }
 
-/** Context fetched from a Jira ticket */
-export interface JiraTicketContext {
-  key: string
-  url: string
-  summary: string
-  description: string
-  status: string
-  priority: string
-  labels: string[]
-  components: string[]
-  comments: string[]
-  fetchedAt: string
-}
-
 /** All credentials for both orgs */
 export interface AllCredentials {
   source: OrgCredentials
@@ -219,7 +224,7 @@ export interface PDIAnalysisRequest {
   pdiDescription: string
   affectedArea?: string
   errorMessage?: string
-  jiraTicket?: JiraTicketContext
+  jiraUrl?: string
 }
 
 /** PDI Analysis result returned from the main process */
@@ -368,4 +373,9 @@ export interface ImportSummary {
   failedRecords: FailedRecord[]
   aborted?: boolean
   abortReason?: string
+  schemaDeployResult?: {
+    deployed: string[]
+    skipped: string[]
+    failed: { fieldName: string; error: string }[]
+  }
 }
