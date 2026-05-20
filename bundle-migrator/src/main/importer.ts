@@ -849,7 +849,7 @@ export async function importBundle(
   logInfo('Step 21 — Upserting Schedule Sections (Schedule-owned)')
   const allSections = bundle.records['LLC_BI__Schedule_Section__c'] ?? []
 
-  const validatedSections = await provisionAndValidateScheduleSectionFields(conn, allSections, bundle.provisioningData, emitProgress)
+  const validatedSections = await provisionAndValidateScheduleSectionFields(conn, allSections, bundle.provisioningData, bundle.records, emitProgress)
 
   const scheduleOwnedSections = validatedSections.filter((r) => !!r.LLC_BI__Schedule__c)
   const debtOwnedSections = validatedSections.filter((r) => !!r.LLC_BI__Debt_Schedule__c)
@@ -1237,10 +1237,57 @@ async function setFieldLevelSecurity(
   logWarn('Could not set FLS on any profile — fields may not be visible. Grant access via Setup > Profiles.')
 }
 
+function inferFieldDefFromRecords(
+  objectApiName: string,
+  fieldApiName: string,
+  records: SfRecord[]
+): CustomFieldDef {
+  let sampleValue: unknown = undefined
+  for (const rec of records) {
+    if (rec[fieldApiName] !== undefined && rec[fieldApiName] !== null) {
+      sampleValue = rec[fieldApiName]
+      break
+    }
+  }
+
+  let dataType = 'string'
+  let precision: number | undefined
+  let scale: number | undefined
+
+  if (sampleValue !== undefined) {
+    if (typeof sampleValue === 'number') {
+      dataType = 'double'
+      precision = 18
+      scale = Number.isInteger(sampleValue) ? 0 : 2
+    } else if (typeof sampleValue === 'boolean') {
+      dataType = 'boolean'
+    } else if (typeof sampleValue === 'string') {
+      if (/^\d{4}-\d{2}-\d{2}T/.test(sampleValue)) {
+        dataType = 'datetime'
+      } else if (/^\d{4}-\d{2}-\d{2}$/.test(sampleValue)) {
+        dataType = 'date'
+      }
+    }
+  }
+
+  const label = fieldApiName.replace(/__c$/, '').replace(/_/g, ' ')
+  return {
+    objectApiName,
+    fieldApiName,
+    label,
+    dataType,
+    isRequired: false,
+    usedByScheduleNames: [],
+    precision,
+    scale
+  }
+}
+
 async function provisionAndValidateScheduleSectionFields(
   conn: Connection,
   sections: SfRecord[],
   provisioningData: ProvisioningMetadata | undefined,
+  bundleRecords: { [objectApiName: string]: SfRecord[] },
   emitProgress: (e: ProgressEvent) => void
 ): Promise<SfRecord[]> {
   if (sections.length === 0) return sections
@@ -1251,11 +1298,13 @@ async function provisionAndValidateScheduleSectionFields(
   const validatedSchedule = await remapAndProvisionFields(
     conn, scheduleOwned, 'LLC_BI__Schedule_Entry__c',
     provisioningData?.customScheduleEntryFields ?? [],
+    bundleRecords['LLC_BI__Schedule_Entry__c'] ?? [],
     emitProgress
   )
   const validatedDebt = await remapAndProvisionFields(
     conn, debtOwned, 'LLC_BI__Debt__c',
     provisioningData?.customDebtFields ?? [],
+    bundleRecords['LLC_BI__Debt__c'] ?? [],
     emitProgress
   )
 
@@ -1267,6 +1316,7 @@ async function remapAndProvisionFields(
   sections: SfRecord[],
   targetObjectApiName: string,
   fieldDefs: CustomFieldDef[],
+  objectRecords: SfRecord[],
   emitProgress: (e: ProgressEvent) => void
 ): Promise<SfRecord[]> {
   if (sections.length === 0) return sections
@@ -1331,40 +1381,38 @@ async function remapAndProvisionFields(
 
   logInfo(`${missing.size} custom field(s) missing on target ${targetObjectApiName} (after remap)`)
 
-  if (fieldDefs.length > 0) {
-    const defMap = new Map<string, CustomFieldDef>()
-    for (const d of fieldDefs) defMap.set(d.fieldApiName, d)
+  const defMap = new Map<string, CustomFieldDef>()
+  for (const d of fieldDefs) defMap.set(d.fieldApiName, d)
 
-    const toCreate: CustomFieldDef[] = []
-    for (const field of missing) {
-      const def = defMap.get(field)
-      if (def) {
-        toCreate.push({ ...def, objectApiName: targetObjectApiName })
-      } else {
-        logWarn(`No provisioning definition for custom field: ${field} on ${targetObjectApiName}`)
-      }
+  const toCreate: CustomFieldDef[] = []
+  for (const field of missing) {
+    const def = defMap.get(field)
+    if (def) {
+      toCreate.push({ ...def, objectApiName: targetObjectApiName })
+    } else {
+      const inferred = inferFieldDefFromRecords(targetObjectApiName, field, objectRecords)
+      toCreate.push(inferred)
+      logInfo(`Inferred type for ${field} on ${targetObjectApiName}: ${inferred.dataType}`)
     }
+  }
 
-    if (toCreate.length > 0) {
-      logInfo(`Creating ${toCreate.length} custom field(s) on ${targetObjectApiName}`)
-      const result = await createCustomFields(conn, targetObjectApiName, toCreate, emitProgress)
-      for (const f of result.created) missing.delete(f)
-      if (result.remaps.size > 0) {
-        for (const [from, to] of result.remaps) {
-          remapEntries.set(from, to)
-          missing.delete(from)
-        }
-        for (const sec of sections) {
-          const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
-          if (entry && result.remaps.has(entry)) {
-            sec.LLC_BI__Schedule_Entry__c = result.remaps.get(entry)!
-          }
-        }
-        logInfo(`Late-remapped ${result.remaps.size} field(s) to managed equivalents: ${[...result.remaps.entries()].map(([from, to]) => `${from}→${to}`).join(', ')}`)
+  if (toCreate.length > 0) {
+    logInfo(`Creating ${toCreate.length} custom field(s) on ${targetObjectApiName}`)
+    const result = await createCustomFields(conn, targetObjectApiName, toCreate, emitProgress)
+    for (const f of result.created) missing.delete(f)
+    if (result.remaps.size > 0) {
+      for (const [from, to] of result.remaps) {
+        remapEntries.set(from, to)
+        missing.delete(from)
       }
+      for (const sec of sections) {
+        const entry = sec.LLC_BI__Schedule_Entry__c as string | undefined
+        if (entry && result.remaps.has(entry)) {
+          sec.LLC_BI__Schedule_Entry__c = result.remaps.get(entry)!
+        }
+      }
+      logInfo(`Late-remapped ${result.remaps.size} field(s) to managed equivalents: ${[...result.remaps.entries()].map(([from, to]) => `${from}→${to}`).join(', ')}`)
     }
-  } else {
-    logWarn(`No provisioning field definitions available for ${targetObjectApiName} — cannot auto-create custom fields`)
   }
 
   if (missing.size === 0) {
